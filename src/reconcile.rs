@@ -296,6 +296,13 @@ pub fn undo_last_apply(store: &StateStore) -> Result<UndoResult> {
     })
 }
 
+pub(crate) fn build_plan_from_resolved(
+    resolved: ResolvedProfile,
+    state: &ManagedState,
+) -> Result<Plan> {
+    plan_from_resolved(resolved, state)
+}
+
 fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result<Plan> {
     let mut items = Vec::new();
     let mut desired_targets = BTreeSet::new();

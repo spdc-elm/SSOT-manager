@@ -1,0 +1,31 @@
+version: 1
+source_root: __SOURCE_ROOT__
+
+profiles:
+  alpha:
+    rules:
+      - select: Skills/*
+        to:
+          - __DEST_ROOT__/skills/
+        mode: symlink
+        tags:
+          - core
+          - global
+        note: sync skills
+      - select: Missing/*
+        to:
+          - __DEST_ROOT__/missing/
+        mode: symlink
+      - select: Agents/assistant.md
+        to:
+          - __DEST_ROOT__/AGENTS.md
+        mode: symlink
+        enabled: false
+
+  beta:
+    source_root: __PROFILE_SOURCE_ROOT__
+    rules:
+      - select: Skills/*
+        to:
+          - __DEST_ROOT__/beta-skills/
+        mode: symlink
