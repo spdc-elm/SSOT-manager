@@ -1,8 +1,5 @@
-# sync-reconciliation Specification
+## MODIFIED Requirements
 
-## Purpose
-Define how the SSOT manager compares desired sync state to the live filesystem and applies safe, verified changes.
-## Requirements
 ### Requirement: The planner classifies target changes explicitly
 The system SHALL compare the desired sync intents for a profile against the current filesystem and classify each target as `create`, `update`, `remove`, `skip`, `warning`, or `danger`. The comparison MUST evaluate whether the current target already matches the desired source asset under the intent's declared materialization mode.
 
@@ -35,4 +32,3 @@ The system SHALL execute filesystem mutations only from the computed plan, refus
 #### Scenario: Dangerous plan is refused
 - **WHEN** a profile plan contains one or more `danger` actions
 - **THEN** the system aborts the apply before mutating those targets and reports the blocking dangers
-

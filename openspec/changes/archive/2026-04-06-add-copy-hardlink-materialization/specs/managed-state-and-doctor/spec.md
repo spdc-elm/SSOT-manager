@@ -1,8 +1,5 @@
-# managed-state-and-doctor Specification
+## MODIFIED Requirements
 
-## Purpose
-Define how the SSOT manager records ownership, detects managed drift, and rolls back the last successful apply.
-## Requirements
 ### Requirement: Successful applies persist managed ownership records
 The system SHALL record managed ownership for every target it creates, updates, or removes during a successful apply, including the profile name, source asset path, target path, materialization mode, and apply timestamp.
 
@@ -46,4 +43,3 @@ The system MUST limit `undo` to the most recent successful apply journal and MUS
 #### Scenario: Unrecorded target is not touched by undo
 - **WHEN** a target path was not included in the last successful apply journal
 - **THEN** the system leaves that target unchanged during `undo`
-

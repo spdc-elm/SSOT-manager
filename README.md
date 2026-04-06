@@ -3,7 +3,7 @@
 Rust implementation workspace for the SSOT manager MVP.
 
 - Scope: deterministic management of personal AI flavour assets as a single source of truth.
-- Core responsibilities: validate config, resolve a named profile, plan changes, apply safe symlink updates, detect drift, and undo the last successful apply.
+- Core responsibilities: validate config, resolve a named profile, plan changes, apply safe materialization updates, detect drift, and undo the last successful apply.
 - Current design draft: [../draft.md](../draft.md)
 
 Config uses a global `source_root` by default, and a profile may optionally override it with `profiles.<name>.source_root` when a subset of rules should resolve from a different source directory.
@@ -27,7 +27,7 @@ The inspection commands also accept `--json` for machine-readable output.
 
 ## Safety Model
 
-- The MVP accepts only `mode: symlink`.
+- Supported materialization modes are `symlink`, `copy`, and `hardlink`.
 - `profile apply` refuses any plan that contains `danger` actions.
 - Unmanaged files and directories are never overwritten silently.
 - Managed records and the last successful apply journal are written only after filesystem verification succeeds.
@@ -64,6 +64,5 @@ Stored files:
 ## Explicit Non-Goals
 
 - No profile composition or include semantics yet
-- No `copy` or `hardlink` support yet
 - No transform hooks or template rendering
 - No TUI or interactive config editing

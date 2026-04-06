@@ -3,11 +3,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
-use crate::config::{Config, ConfigDiagnostic, ResolvedProfile, SyncIntent, resolve_profile};
-use crate::paths::{path_to_string, resolved_link_target, symlink_target_for};
+use crate::config::{
+    Config, ConfigDiagnostic, MaterializationMode, ResolvedProfile, SyncIntent, resolve_profile,
+};
+use crate::paths::path_to_string;
 use crate::state::{
-    ApplyJournal, JournalEntry, ManagedState, PathState, StateStore, build_record, create_symlink,
-    now_timestamp, remove_existing_path, restore_path, snapshot_path, symlink_matches_expected,
+    ApplyJournal, JournalEntry, ManagedState, PathState, StateStore, build_record,
+    materialize_target, now_timestamp, remove_existing_path, restore_from_source, restore_path,
+    snapshot_path, target_matches_source,
 };
 
 #[derive(Debug, Clone)]
@@ -22,6 +25,7 @@ pub struct PlanItem {
     pub action: Action,
     pub target: PathBuf,
     pub desired_source: Option<PathBuf>,
+    pub desired_mode: Option<MaterializationMode>,
     pub reason: String,
 }
 
@@ -78,7 +82,7 @@ pub fn apply_plan(plan: Plan, state: &ManagedState, store: &StateStore) -> Resul
     }
 
     let timestamp = now_timestamp()?;
-    let desired_sources = desired_source_map(&plan);
+    let desired_targets = desired_target_map(&plan);
     let mut next_state = state.clone();
     let mut journal_entries = Vec::new();
 
@@ -89,18 +93,29 @@ pub fn apply_plan(plan: Plan, state: &ManagedState, store: &StateStore) -> Resul
                     .desired_source
                     .as_ref()
                     .expect("desired source is required for create/update");
+                let desired_mode = item
+                    .desired_mode
+                    .expect("desired mode is required for create/update");
                 let before = snapshot_path(&item.target)?;
                 let record_before = next_state
                     .records
                     .get(&path_to_string(&item.target))
                     .cloned();
+                let record_before_source_state = record_before
+                    .as_ref()
+                    .and_then(|record| match record.mode {
+                        MaterializationMode::Copy | MaterializationMode::Hardlink => {
+                            Some(snapshot_path(Path::new(&record.source)))
+                        }
+                        MaterializationMode::Symlink => None,
+                    })
+                    .transpose()?;
 
                 remove_existing_path(&item.target)?;
-                let link_target = symlink_target_for(desired_source, &item.target);
-                create_symlink(&item.target, &link_target)?;
+                materialize_target(desired_source, &item.target, desired_mode)?;
 
                 let after = snapshot_path(&item.target)?;
-                if !symlink_matches_expected(&item.target, &after, desired_source) {
+                if !target_matches_source(desired_source, &item.target, &after, desired_mode)? {
                     bail!(
                         "verification failed for {} after {}",
                         item.target.display(),
@@ -113,7 +128,7 @@ pub fn apply_plan(plan: Plan, state: &ManagedState, store: &StateStore) -> Resul
                         profile_name: plan.profile_name.clone(),
                         source: desired_source.clone(),
                         target: item.target.clone(),
-                        mode: crate::config::MaterializationMode::Symlink,
+                        mode: desired_mode,
                     },
                     timestamp,
                 ));
@@ -130,6 +145,7 @@ pub fn apply_plan(plan: Plan, state: &ManagedState, store: &StateStore) -> Resul
                     before,
                     after,
                     record_before,
+                    record_before_source_state,
                     record_after,
                 });
             }
@@ -139,11 +155,31 @@ pub fn apply_plan(plan: Plan, state: &ManagedState, store: &StateStore) -> Resul
                     .records
                     .get(&path_to_string(&item.target))
                     .cloned();
+                let record_before_source_state = record_before
+                    .as_ref()
+                    .and_then(|record| match record.mode {
+                        MaterializationMode::Copy | MaterializationMode::Hardlink => {
+                            Some(snapshot_path(Path::new(&record.source)))
+                        }
+                        MaterializationMode::Symlink => None,
+                    })
+                    .transpose()?;
 
-                match before {
+                match &before {
                     PathState::Missing => {}
                     PathState::Symlink { .. } => remove_existing_path(&item.target)?,
-                    PathState::File | PathState::Directory | PathState::Other => bail!(
+                    PathState::File { .. } | PathState::Directory { .. } => {
+                        match record_before.as_ref().map(|record| record.mode) {
+                            Some(MaterializationMode::Copy | MaterializationMode::Hardlink) => {
+                                remove_existing_path(&item.target)?
+                            }
+                            _ => bail!(
+                                "refusing to remove '{}' because it drifted away from a managed symlink",
+                                item.target.display()
+                            ),
+                        }
+                    }
+                    PathState::Other => bail!(
                         "refusing to remove '{}' because it drifted away from a managed symlink",
                         item.target.display()
                     ),
@@ -158,6 +194,7 @@ pub fn apply_plan(plan: Plan, state: &ManagedState, store: &StateStore) -> Resul
                     before,
                     after,
                     record_before,
+                    record_before_source_state,
                     record_after: None,
                 });
             }
@@ -167,6 +204,9 @@ pub fn apply_plan(plan: Plan, state: &ManagedState, store: &StateStore) -> Resul
                         existing.updated_at = timestamp;
                         if let Some(desired_source) = &item.desired_source {
                             existing.source = path_to_string(desired_source);
+                        }
+                        if let Some(desired_mode) = item.desired_mode {
+                            existing.mode = desired_mode;
                         }
                     }
                 }
@@ -181,7 +221,7 @@ pub fn apply_plan(plan: Plan, state: &ManagedState, store: &StateStore) -> Resul
         entries: journal_entries,
     };
 
-    verify_plan_state(&plan, &desired_sources)?;
+    verify_plan_state(&plan, &desired_targets)?;
 
     store.save(&next_state)?;
     store.write_last_apply(&journal)?;
@@ -214,35 +254,47 @@ pub fn doctor_profile(
                 target,
                 message: "managed target is missing".to_string(),
             }),
-            PathState::Symlink {
-                target: current_target,
-            } => {
-                let resolved = resolved_link_target(&target, Path::new(&current_target));
-                if !resolved.exists() {
+            PathState::Symlink { .. } | PathState::File { .. } | PathState::Directory { .. } => {
+                let source = PathBuf::from(&record.source);
+                if matches!(record.mode, MaterializationMode::Symlink) && !source.exists() {
                     issues.push(DoctorIssue {
                         kind: DoctorIssueKind::BrokenSymlink,
                         target,
                         message: format!(
                             "managed symlink points to missing path {}",
-                            resolved.display()
+                            source.display()
                         ),
                     });
-                } else if resolved != PathBuf::from(&record.source) {
+                } else if !target_matches_source(
+                    Path::new(&record.source),
+                    &target,
+                    &current,
+                    record.mode,
+                )? {
+                    let message = match record.mode {
+                        MaterializationMode::Symlink => {
+                            format!("managed symlink no longer points to {}", source.display())
+                        }
+                        MaterializationMode::Copy => format!(
+                            "managed copied target no longer matches source {}",
+                            record.source
+                        ),
+                        MaterializationMode::Hardlink => format!(
+                            "managed hardlinked target no longer matches source {}",
+                            record.source
+                        ),
+                    };
                     issues.push(DoctorIssue {
                         kind: DoctorIssueKind::ManagedDrift,
                         target,
-                        message: format!(
-                            "managed symlink points to {} instead of {}",
-                            resolved.display(),
-                            record.source
-                        ),
+                        message,
                     });
                 }
             }
-            PathState::File | PathState::Directory | PathState::Other => issues.push(DoctorIssue {
+            PathState::Other => issues.push(DoctorIssue {
                 kind: DoctorIssueKind::ManagedDrift,
                 target,
-                message: "managed target was replaced by non-symlink content".to_string(),
+                message: "managed target was replaced by unsupported content".to_string(),
             }),
         }
     }
@@ -273,7 +325,33 @@ pub fn undo_last_apply(store: &StateStore) -> Result<UndoResult> {
     let mut reverted_targets = Vec::new();
     for entry in journal.entries.iter().rev() {
         let target = PathBuf::from(&entry.target);
-        restore_path(&target, &entry.before)?;
+        match &entry.before {
+            PathState::Missing | PathState::Symlink { .. } => restore_path(&target, &entry.before)?,
+            PathState::File { .. } | PathState::Directory { .. } => {
+                let record_before = entry.record_before.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "undo cannot restore concrete content at {} without a managed record",
+                        target.display()
+                    )
+                })?;
+                let source_state = entry.record_before_source_state.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "undo cannot restore {} because the previous source snapshot is missing",
+                        target.display()
+                    )
+                })?;
+                restore_from_source(
+                    &target,
+                    Path::new(&record_before.source),
+                    record_before.mode,
+                    source_state,
+                )?;
+            }
+            PathState::Other => bail!(
+                "undo cannot restore unsupported content at {}",
+                target.display()
+            ),
+        }
 
         match &entry.record_before {
             Some(record) => {
@@ -313,19 +391,22 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
         let record = state.records.get(&target_key);
         desired_targets.insert(target_key.clone());
 
-        let item = if symlink_matches_expected(&intent.target, &current, &intent.source) {
+        let item = if target_matches_source(&intent.source, &intent.target, &current, intent.mode)?
+        {
             PlanItem {
                 action: Action::Skip,
                 target: intent.target.clone(),
                 desired_source: Some(intent.source.clone()),
-                reason: "target already matches desired symlink".to_string(),
+                desired_mode: Some(intent.mode),
+                reason: "target already matches the desired materialization".to_string(),
             }
         } else {
-            match current {
+            match &current {
                 PathState::Missing => PlanItem {
                     action: Action::Create,
                     target: intent.target.clone(),
                     desired_source: Some(intent.source.clone()),
+                    desired_mode: Some(intent.mode),
                     reason: "target does not exist".to_string(),
                 },
                 PathState::Symlink { .. } => match record {
@@ -333,42 +414,71 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
                         action: Action::Update,
                         target: intent.target.clone(),
                         desired_source: Some(intent.source.clone()),
-                        reason: "managed symlink points to a different source".to_string(),
-                    },
-                    Some(_) => PlanItem {
-                        action: Action::Danger,
-                        target: intent.target.clone(),
-                        desired_source: Some(intent.source.clone()),
-                        reason: "target is managed by another profile".to_string(),
-                    },
-                    None => PlanItem {
-                        action: Action::Danger,
-                        target: intent.target.clone(),
-                        desired_source: Some(intent.source.clone()),
-                        reason: "target is an unmanaged symlink that would be replaced".to_string(),
-                    },
-                },
-                PathState::File | PathState::Directory | PathState::Other => match record {
-                    Some(record) if record.profile == resolved.profile_name => PlanItem {
-                        action: Action::Warning,
-                        target: intent.target.clone(),
-                        desired_source: Some(intent.source.clone()),
-                        reason: "managed target drifted into non-symlink content; inspect before mutating"
+                        desired_mode: Some(intent.mode),
+                        reason: "managed target no longer matches the desired materialization"
                             .to_string(),
                     },
                     Some(_) => PlanItem {
                         action: Action::Danger,
                         target: intent.target.clone(),
                         desired_source: Some(intent.source.clone()),
+                        desired_mode: Some(intent.mode),
                         reason: "target is managed by another profile".to_string(),
                     },
                     None => PlanItem {
                         action: Action::Danger,
                         target: intent.target.clone(),
                         desired_source: Some(intent.source.clone()),
-                        reason: "target contains unmanaged content".to_string(),
+                        desired_mode: Some(intent.mode),
+                        reason: "target is an unmanaged symlink that would be replaced".to_string(),
                     },
                 },
+                PathState::File { .. } | PathState::Directory { .. } | PathState::Other => {
+                    match record {
+                        Some(record) if record.profile == resolved.profile_name => {
+                            let action = match (intent.mode, &current) {
+                                (
+                                    MaterializationMode::Symlink,
+                                    PathState::File { .. }
+                                    | PathState::Directory { .. }
+                                    | PathState::Other,
+                                ) => Action::Warning,
+                                (_, PathState::Other) => Action::Warning,
+                                _ => Action::Update,
+                            };
+                            let reason = match action {
+                                Action::Update => {
+                                    "managed target no longer matches the desired materialization"
+                                }
+                                Action::Warning => {
+                                    "managed target drifted into content that should be inspected before mutating"
+                                }
+                                _ => unreachable!(),
+                            };
+                            PlanItem {
+                                action,
+                                target: intent.target.clone(),
+                                desired_source: Some(intent.source.clone()),
+                                desired_mode: Some(intent.mode),
+                                reason: reason.to_string(),
+                            }
+                        }
+                        Some(_) => PlanItem {
+                            action: Action::Danger,
+                            target: intent.target.clone(),
+                            desired_source: Some(intent.source.clone()),
+                            desired_mode: Some(intent.mode),
+                            reason: "target is managed by another profile".to_string(),
+                        },
+                        None => PlanItem {
+                            action: Action::Danger,
+                            target: intent.target.clone(),
+                            desired_source: Some(intent.source.clone()),
+                            desired_mode: Some(intent.mode),
+                            reason: "target contains unmanaged content".to_string(),
+                        },
+                    }
+                }
             }
         };
 
@@ -386,16 +496,25 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
 
         let target = PathBuf::from(&record.target);
         let current = snapshot_path(&target)?;
-        let action = match current {
-            PathState::Missing | PathState::Symlink { .. } => Action::Remove,
-            PathState::File | PathState::Directory | PathState::Other => Action::Warning,
+        let action = match (&record.mode, current) {
+            (_, PathState::Missing) => Action::Remove,
+            (MaterializationMode::Symlink, PathState::Symlink { .. }) => Action::Remove,
+            (
+                MaterializationMode::Copy | MaterializationMode::Hardlink,
+                PathState::Symlink { .. },
+            )
+            | (
+                MaterializationMode::Copy | MaterializationMode::Hardlink,
+                PathState::File { .. } | PathState::Directory { .. },
+            ) => Action::Remove,
+            _ => Action::Warning,
         };
         let reason = match action {
             Action::Remove => {
                 "target was previously managed by this profile but is no longer desired"
             }
             Action::Warning => {
-                "target was previously managed by this profile but drifted into non-symlink content"
+                "target was previously managed by this profile but drifted into content that should be inspected before removal"
             }
             _ => unreachable!(),
         };
@@ -404,6 +523,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
             action,
             target,
             desired_source: None,
+            desired_mode: None,
             reason: reason.to_string(),
         });
     }
@@ -424,23 +544,33 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
     })
 }
 
-fn desired_source_map(plan: &Plan) -> BTreeMap<String, PathBuf> {
+fn desired_target_map(plan: &Plan) -> BTreeMap<String, (PathBuf, MaterializationMode)> {
     let mut desired = BTreeMap::new();
     for item in &plan.items {
-        if let Some(source) = &item.desired_source {
-            desired.insert(path_to_string(&item.target), source.clone());
+        if let (Some(source), Some(mode)) = (&item.desired_source, item.desired_mode) {
+            desired.insert(path_to_string(&item.target), (source.clone(), mode));
         }
     }
     desired
 }
 
-fn verify_plan_state(plan: &Plan, desired_sources: &BTreeMap<String, PathBuf>) -> Result<()> {
+fn verify_plan_state(
+    plan: &Plan,
+    desired_targets: &BTreeMap<String, (PathBuf, MaterializationMode)>,
+) -> Result<()> {
     for item in &plan.items {
         match item.action {
             Action::Create | Action::Update | Action::Skip => {
-                if let Some(expected) = desired_sources.get(&path_to_string(&item.target)) {
+                if let Some((expected_source, expected_mode)) =
+                    desired_targets.get(&path_to_string(&item.target))
+                {
                     let current = snapshot_path(&item.target)?;
-                    if !symlink_matches_expected(&item.target, &current, expected) {
+                    if !target_matches_source(
+                        expected_source,
+                        &item.target,
+                        &current,
+                        *expected_mode,
+                    )? {
                         bail!(
                             "verification failed for {} after {}",
                             item.target.display(),

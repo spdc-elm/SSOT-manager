@@ -95,6 +95,7 @@ fn profile_show_json_reports_override_source_root() {
         fixture.root().join("profile-source").display().to_string()
     );
     assert_eq!(value["rules"].as_array().unwrap().len(), 1);
+    assert_eq!(value["rules"][0]["mode"], "hardlink");
 }
 
 #[test]

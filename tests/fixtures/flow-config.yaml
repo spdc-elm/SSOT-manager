@@ -19,3 +19,17 @@ profiles:
         to:
           - __DEST_ROOT__/safe-skills/
         mode: symlink
+
+  copy-safe:
+    rules:
+      - select: Skills/alpha
+        to:
+          - __DEST_ROOT__/copied-skills/
+        mode: copy
+
+  hardlink-safe:
+    rules:
+      - select: Skills/alpha
+        to:
+          - __DEST_ROOT__/hardlinked-skills/
+        mode: hardlink

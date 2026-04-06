@@ -1,13 +1,17 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::config::{MaterializationMode, SyncIntent};
-use crate::paths::{default_state_dir, normalize, path_to_string, resolved_link_target};
+use crate::paths::{
+    default_state_dir, normalize, path_to_string, resolved_link_target, symlink_target_for,
+};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ManagedState {
@@ -38,6 +42,8 @@ pub struct JournalEntry {
     pub before: PathState,
     pub after: PathState,
     pub record_before: Option<ManagedRecord>,
+    #[serde(default)]
+    pub record_before_source_state: Option<PathState>,
     pub record_after: Option<ManagedRecord>,
 }
 
@@ -45,9 +51,19 @@ pub struct JournalEntry {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PathState {
     Missing,
-    Symlink { target: String },
-    File,
-    Directory,
+    Symlink {
+        target: String,
+        resolved_target: String,
+    },
+    File {
+        size: u64,
+        sha256: String,
+        device: Option<u64>,
+        inode: Option<u64>,
+    },
+    Directory {
+        entries: BTreeMap<String, PathState>,
+    },
     Other,
 }
 
@@ -138,13 +154,22 @@ pub fn snapshot_path(path: &Path) -> Result<PathState> {
                     .with_context(|| format!("failed to read link {}", path.display()))?;
                 return Ok(PathState::Symlink {
                     target: path_to_string(&target),
+                    resolved_target: path_to_string(&resolved_link_target(path, &target)),
                 });
             }
             if file_type.is_dir() {
-                return Ok(PathState::Directory);
+                let mut entries = BTreeMap::new();
+                for entry in fs::read_dir(path)
+                    .with_context(|| format!("failed to read directory {}", path.display()))?
+                {
+                    let entry = entry?;
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    entries.insert(name, snapshot_path(&entry.path())?);
+                }
+                return Ok(PathState::Directory { entries });
             }
             if file_type.is_file() {
-                return Ok(PathState::File);
+                return snapshot_file(path, &metadata);
             }
             Ok(PathState::Other)
         }
@@ -175,12 +200,9 @@ pub fn restore_path(path: &Path, desired: &PathState) -> Result<()> {
 
     match desired {
         PathState::Missing => Ok(()),
-        PathState::Symlink { target } => create_symlink(path, Path::new(target)),
-        PathState::File | PathState::Directory | PathState::Other => {
-            bail!(
-                "undo cannot restore non-symlink content at {}",
-                path.display()
-            )
+        PathState::Symlink { target, .. } => create_symlink(path, Path::new(target)),
+        PathState::File { .. } | PathState::Directory { .. } | PathState::Other => {
+            bail!("undo cannot restore concrete content at {}", path.display())
         }
     }
 }
@@ -211,24 +233,289 @@ pub fn create_symlink(target: &Path, link_target: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn materialize_target(source: &Path, target: &Path, mode: MaterializationMode) -> Result<()> {
+    match mode {
+        MaterializationMode::Symlink => {
+            let link_target = symlink_target_for(source, target);
+            create_symlink(target, &link_target)
+        }
+        MaterializationMode::Copy => materialize_copy(source, target),
+        MaterializationMode::Hardlink => materialize_hardlink(source, target),
+    }
+}
+
 pub fn remove_existing_path(path: &Path) -> Result<()> {
     match snapshot_path(path)? {
         PathState::Missing => Ok(()),
-        PathState::Directory => fs::remove_dir_all(path)
+        PathState::Directory { .. } => fs::remove_dir_all(path)
             .with_context(|| format!("failed to remove directory {}", path.display())),
-        PathState::Symlink { .. } | PathState::File | PathState::Other => {
+        PathState::Symlink { .. } | PathState::File { .. } | PathState::Other => {
             fs::remove_file(path).with_context(|| format!("failed to remove {}", path.display()))
         }
     }
 }
 
-pub fn symlink_matches_expected(path: &Path, current: &PathState, expected_source: &Path) -> bool {
+pub fn symlink_matches_expected(_path: &Path, current: &PathState, expected_source: &Path) -> bool {
     match current {
-        PathState::Symlink { target } => {
-            resolved_link_target(path, Path::new(target)) == normalize(expected_source)
-        }
+        PathState::Symlink {
+            resolved_target, ..
+        } => PathBuf::from(resolved_target) == normalize(expected_source),
         _ => false,
     }
+}
+
+pub fn path_state_content_matches(left: &PathState, right: &PathState) -> bool {
+    match (left, right) {
+        (PathState::Missing, PathState::Missing) => true,
+        (
+            PathState::Symlink {
+                resolved_target: left_resolved,
+                ..
+            },
+            PathState::Symlink {
+                resolved_target: right_resolved,
+                ..
+            },
+        ) => left_resolved == right_resolved,
+        (
+            PathState::File {
+                size: left_size,
+                sha256: left_sha256,
+                ..
+            },
+            PathState::File {
+                size: right_size,
+                sha256: right_sha256,
+                ..
+            },
+        ) => left_size == right_size && left_sha256 == right_sha256,
+        (
+            PathState::Directory {
+                entries: left_entries,
+            },
+            PathState::Directory {
+                entries: right_entries,
+            },
+        ) => {
+            left_entries.len() == right_entries.len()
+                && left_entries.iter().all(|(name, left_state)| {
+                    right_entries.get(name).is_some_and(|right_state| {
+                        path_state_content_matches(left_state, right_state)
+                    })
+                })
+        }
+        (PathState::Other, PathState::Other) => true,
+        _ => false,
+    }
+}
+
+pub fn path_state_hardlink_matches(left: &PathState, right: &PathState) -> bool {
+    match (left, right) {
+        (PathState::Missing, PathState::Missing) => true,
+        (
+            PathState::Symlink {
+                resolved_target: left_resolved,
+                ..
+            },
+            PathState::Symlink {
+                resolved_target: right_resolved,
+                ..
+            },
+        ) => left_resolved == right_resolved,
+        (
+            PathState::File {
+                size: left_size,
+                sha256: left_sha256,
+                device: left_device,
+                inode: left_inode,
+            },
+            PathState::File {
+                size: right_size,
+                sha256: right_sha256,
+                device: right_device,
+                inode: right_inode,
+            },
+        ) => {
+            left_size == right_size
+                && left_sha256 == right_sha256
+                && left_device == right_device
+                && left_inode == right_inode
+        }
+        (
+            PathState::Directory {
+                entries: left_entries,
+            },
+            PathState::Directory {
+                entries: right_entries,
+            },
+        ) => {
+            left_entries.len() == right_entries.len()
+                && left_entries.iter().all(|(name, left_state)| {
+                    right_entries.get(name).is_some_and(|right_state| {
+                        path_state_hardlink_matches(left_state, right_state)
+                    })
+                })
+        }
+        (PathState::Other, PathState::Other) => true,
+        _ => false,
+    }
+}
+
+pub fn target_matches_source(
+    source: &Path,
+    target: &Path,
+    current_target: &PathState,
+    mode: MaterializationMode,
+) -> Result<bool> {
+    match mode {
+        MaterializationMode::Symlink => {
+            Ok(symlink_matches_expected(target, current_target, source))
+        }
+        MaterializationMode::Copy => {
+            let source_state = snapshot_path(source)?;
+            Ok(path_state_content_matches(&source_state, current_target))
+        }
+        MaterializationMode::Hardlink => {
+            let source_state = snapshot_path(source)?;
+            Ok(path_state_hardlink_matches(&source_state, current_target))
+        }
+    }
+}
+
+pub fn restore_from_source(
+    target: &Path,
+    source: &Path,
+    mode: MaterializationMode,
+    recorded_source_state: &PathState,
+) -> Result<()> {
+    let current_source_state = snapshot_path(source)?;
+    if !path_state_content_matches(&current_source_state, recorded_source_state) {
+        bail!(
+            "refusing to undo because source {} no longer matches the recorded state",
+            source.display()
+        );
+    }
+
+    remove_existing_path(target)?;
+    materialize_target(source, target, mode)
+}
+
+fn materialize_copy(source: &Path, target: &Path) -> Result<()> {
+    materialize_tree(source, target, MaterializationMode::Copy)
+}
+
+fn materialize_hardlink(source: &Path, target: &Path) -> Result<()> {
+    materialize_tree(source, target, MaterializationMode::Hardlink)
+}
+
+fn materialize_tree(source: &Path, target: &Path, mode: MaterializationMode) -> Result<()> {
+    let metadata = fs::symlink_metadata(source)
+        .with_context(|| format!("failed to inspect source {}", source.display()))?;
+    let file_type = metadata.file_type();
+
+    if file_type.is_symlink() {
+        let raw_target = fs::read_link(source)
+            .with_context(|| format!("failed to read link {}", source.display()))?;
+        let resolved_target = resolved_link_target(source, &raw_target);
+        let link_target = symlink_target_for(&resolved_target, target);
+        return create_symlink(target, &link_target);
+    }
+
+    if file_type.is_dir() {
+        fs::create_dir_all(target)
+            .with_context(|| format!("failed to create {}", target.display()))?;
+        apply_permissions(target, &metadata)?;
+        for entry in fs::read_dir(source)
+            .with_context(|| format!("failed to read directory {}", source.display()))?
+        {
+            let entry = entry?;
+            materialize_tree(&entry.path(), &target.join(entry.file_name()), mode)?;
+        }
+        return Ok(());
+    }
+
+    if file_type.is_file() {
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+
+        match mode {
+            MaterializationMode::Copy => {
+                fs::copy(source, target).with_context(|| {
+                    format!(
+                        "failed to copy {} to {}",
+                        source.display(),
+                        target.display()
+                    )
+                })?;
+                apply_permissions(target, &metadata)?;
+            }
+            MaterializationMode::Hardlink => fs::hard_link(source, target).with_context(|| {
+                format!(
+                    "failed to hardlink {} to {}",
+                    source.display(),
+                    target.display()
+                )
+            })?,
+            MaterializationMode::Symlink => unreachable!(),
+        }
+
+        return Ok(());
+    }
+
+    bail!("unsupported source type at {}", source.display())
+}
+
+fn snapshot_file(path: &Path, metadata: &fs::Metadata) -> Result<PathState> {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+
+    let sha256 = sha256_file(path)?;
+    #[cfg(unix)]
+    let (device, inode) = (Some(metadata.dev()), Some(metadata.ino()));
+    #[cfg(not(unix))]
+    let (device, inode) = (None, None);
+
+    Ok(PathState::File {
+        size: metadata.len(),
+        sha256,
+        device,
+        inode,
+    })
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file =
+        fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(bytes_to_hex(&hasher.finalize()))
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut hex, "{byte:02x}");
+    }
+    hex
+}
+
+fn apply_permissions(target: &Path, metadata: &fs::Metadata) -> Result<()> {
+    fs::set_permissions(target, metadata.permissions())
+        .with_context(|| format!("failed to set permissions on {}", target.display()))
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {

@@ -28,4 +28,4 @@ profiles:
       - select: Skills/*
         to:
           - __DEST_ROOT__/beta-skills/
-        mode: symlink
+        mode: hardlink

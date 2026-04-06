@@ -7,4 +7,4 @@ profiles:
       - select: Skills/*
         to:
           - __DEST_ROOT__/skills/
-        mode: copy
+        mode: mirror

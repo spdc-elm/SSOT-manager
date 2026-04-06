@@ -40,7 +40,25 @@ fn rejects_unsupported_mode_fixture() {
         .arg("validate")
         .assert()
         .failure()
-        .stderr(predicates::str::contains("only symlink is supported"));
+        .stderr(predicates::str::contains("uses unknown mode"));
+}
+
+#[test]
+fn accepts_copy_and_hardlink_modes() {
+    let fixture = prepare_fixture("supported-modes.yaml", |temp| {
+        fs::create_dir_all(temp.path().join("source/Skills/alpha")).unwrap();
+        fs::create_dir_all(temp.path().join("source/Agents")).unwrap();
+        fs::write(temp.path().join("source/Agents/assistant.md"), "assistant").unwrap();
+    });
+
+    bin()
+        .arg("--config")
+        .arg(fixture.config_path())
+        .arg("config")
+        .arg("validate")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Config is valid"));
 }
 
 #[test]

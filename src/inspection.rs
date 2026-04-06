@@ -199,7 +199,5 @@ pub fn explain_profile(
 }
 
 fn materialization_mode_as_str(mode: MaterializationMode) -> &'static str {
-    match mode {
-        MaterializationMode::Symlink => "symlink",
-    }
+    mode.as_str()
 }

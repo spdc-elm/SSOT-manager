@@ -37,6 +37,8 @@ pub struct Rule {
 #[serde(rename_all = "snake_case")]
 pub enum MaterializationMode {
     Symlink,
+    Copy,
+    Hardlink,
 }
 
 #[derive(Debug, Clone)]
@@ -212,13 +214,8 @@ fn validate_raw_config(raw: RawConfig, config_dir: PathBuf) -> Result<Config> {
 
             let mode = match rule.mode.as_str() {
                 "symlink" => MaterializationMode::Symlink,
-                "copy" | "hardlink" => {
-                    bail!(
-                        "profile '{name}' rule {} uses unsupported mode '{}'; only symlink is supported in the MVP",
-                        index + 1,
-                        rule.mode
-                    )
-                }
+                "copy" => MaterializationMode::Copy,
+                "hardlink" => MaterializationMode::Hardlink,
                 _ => {
                     bail!(
                         "profile '{name}' rule {} uses unknown mode '{}'",
@@ -330,4 +327,14 @@ fn resolve_target_path(
 
 fn default_true() -> bool {
     true
+}
+
+impl MaterializationMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MaterializationMode::Symlink => "symlink",
+            MaterializationMode::Copy => "copy",
+            MaterializationMode::Hardlink => "hardlink",
+        }
+    }
 }

@@ -119,6 +119,127 @@ fn apply_refuses_unmanaged_collision() {
         .stderr(predicates::str::contains("danger actions"));
 }
 
+#[test]
+fn copy_mode_updates_plan_reports_drift_and_blocks_undo_after_target_edit() {
+    let harness = Harness::new();
+    let state_dir = harness.path().join("state");
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("copy-safe")
+        .assert()
+        .success();
+
+    let source_file = harness.source_root().join("Skills/alpha/SKILL.md");
+    let target_file = harness.dest_root().join("copied-skills/alpha/SKILL.md");
+
+    assert!(
+        fs::symlink_metadata(&target_file)
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(fs::read_to_string(&target_file).unwrap(), "# alpha");
+
+    fs::write(&source_file, "# alpha updated").unwrap();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("plan")
+        .arg("copy-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("update"));
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("doctor")
+        .arg("copy-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("managed_drift"));
+
+    fs::write(&target_file, "edited target").unwrap();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("undo")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("recorded post-apply state"));
+}
+
+#[test]
+fn hardlink_mode_creates_linked_tree_and_doctor_detects_relation_drift() {
+    use std::os::unix::fs::MetadataExt;
+
+    let harness = Harness::new();
+    let state_dir = harness.path().join("state");
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("hardlink-safe")
+        .assert()
+        .success();
+
+    let source_file = harness.source_root().join("Skills/alpha/SKILL.md");
+    let target_file = harness.dest_root().join("hardlinked-skills/alpha/SKILL.md");
+    let source_meta = fs::metadata(&source_file).unwrap();
+    let target_meta = fs::metadata(&target_file).unwrap();
+
+    assert!(target_meta.is_file());
+    assert_eq!(source_meta.ino(), target_meta.ino());
+    assert_eq!(source_meta.dev(), target_meta.dev());
+
+    fs::remove_file(&source_file).unwrap();
+    fs::write(&source_file, "# alpha").unwrap();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("doctor")
+        .arg("hardlink-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("managed_drift"));
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("undo")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("targets reverted"));
+
+    assert!(!target_file.exists());
+}
+
 struct Harness {
     temp: TempDir,
     config_path: PathBuf,
