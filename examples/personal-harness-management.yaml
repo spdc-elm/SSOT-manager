@@ -1,5 +1,5 @@
 version: 1
-source_root: /path/to/personal-harness-management
+source_root: ../..
 
 profiles:
   skill-global:
@@ -15,8 +15,9 @@ profiles:
         mode: symlink
 
   kg-local:
+    source_root: ../../KG_Local
     rules:
-      - select: KG_Local/Skills/[!.]*
+      - select: Skills/[!.]*
         to:
           - /tmp/ssot-manager-example/kg-skills/
         mode: symlink

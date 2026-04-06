@@ -1,0 +1,11 @@
+version: 1
+source_root: __GLOBAL_SOURCE_ROOT__
+
+profiles:
+  override-root:
+    source_root: __PROFILE_SOURCE_ROOT__
+    rules:
+      - select: Skills/*
+        to:
+          - __DEST_ROOT__/skills/
+        mode: symlink

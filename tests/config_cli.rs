@@ -82,6 +82,26 @@ fn rejects_unknown_profile() {
         .stderr(predicates::str::contains("unknown profile"));
 }
 
+#[test]
+fn profile_source_root_overrides_global_source_root() {
+    let fixture = prepare_fixture("profile-source-root.yaml", |temp| {
+        fs::create_dir_all(temp.path().join("global-source/Skills/global-only")).unwrap();
+        fs::create_dir_all(temp.path().join("profile-source/Skills/profile-only")).unwrap();
+        fs::create_dir_all(temp.path().join("dest")).unwrap();
+    });
+
+    bin()
+        .arg("--config")
+        .arg(fixture.config_path())
+        .arg("profile")
+        .arg("plan")
+        .arg("override-root")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("profile-only"))
+        .stdout(predicates::str::contains("global-only").not());
+}
+
 fn prepare_fixture(name: &str, setup: impl FnOnce(&TempDir)) -> Fixture {
     let temp = TempDir::new().unwrap();
     setup(&temp);
@@ -92,6 +112,14 @@ fn prepare_fixture(name: &str, setup: impl FnOnce(&TempDir)) -> Fixture {
         .replace(
             "__SOURCE_ROOT__",
             &temp.path().join("source").display().to_string(),
+        )
+        .replace(
+            "__GLOBAL_SOURCE_ROOT__",
+            &temp.path().join("global-source").display().to_string(),
+        )
+        .replace(
+            "__PROFILE_SOURCE_ROOT__",
+            &temp.path().join("profile-source").display().to_string(),
         )
         .replace(
             "__DEST_ROOT__",

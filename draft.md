@@ -64,6 +64,8 @@ The minimal model should be:
 - `profiles`
 - `rules`
 
+The top-level `source_root` is the default source base. A profile may optionally override it when that profile intentionally resolves assets from a different source subtree or directory.
+
 Each rule should answer:
 - what to select
 - where to sync it
@@ -83,6 +85,7 @@ A named ruleset. Examples:
 - `skill-all`
 
 A profile may include other profiles, but composition must be explicit and predictable.
+A profile may also optionally override the default `source_root`.
 
 #### `rule`
 
@@ -134,8 +137,9 @@ profiles:
         mode: symlink
 
   skill-kg:
+    source_root: /path/to/personal-harness-management/KG_Local
     rules:
-      - select: KG_Local/Skills/*
+      - select: Skills/*
         to:
           - /path/to/AI-KnowledgeGarden/.agent/skills/
           - /path/to/AI-KnowledgeGarden/.claude/skills/

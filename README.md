@@ -6,6 +6,8 @@ Rust implementation workspace for the SSOT manager MVP.
 - Core responsibilities: validate config, resolve a named profile, plan changes, apply safe symlink updates, detect drift, and undo the last successful apply.
 - Current design draft: [../draft.md](../draft.md)
 
+Config uses a global `source_root` by default, and a profile may optionally override it with `profiles.<name>.source_root` when a subset of rules should resolve from a different source directory.
+
 ## MVP Commands
 
 ```bash
@@ -40,7 +42,7 @@ Stored files:
 
 ## Example Config
 
-[`examples/personal-harness-management.yaml`](examples/personal-harness-management.yaml) points at this repo and syncs to `/tmp/ssot-manager-example/` so the workflow can be exercised without touching consumer config directories.
+[`examples/personal-harness-management.yaml`](examples/personal-harness-management.yaml) uses relative paths so it can be run from this repo checkout and syncs to `/tmp/ssot-manager-example/` so the workflow can be exercised without touching consumer config directories. The example also shows `kg-local` overriding the global `source_root`.
 
 ## Explicit Non-Goals
 

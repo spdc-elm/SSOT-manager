@@ -19,6 +19,7 @@ pub struct Config {
 
 #[derive(Debug, Clone)]
 pub struct Profile {
+    pub source_root: PathBuf,
     pub rules: Vec<Rule>,
 }
 
@@ -68,6 +69,7 @@ struct RawConfig {
 
 #[derive(Debug, Deserialize)]
 struct RawProfile {
+    source_root: Option<String>,
     #[serde(default)]
     rules: Vec<RawRule>,
 }
@@ -114,14 +116,14 @@ pub fn resolve_profile(config: &Config, profile_name: &str) -> Result<ResolvedPr
     let mut targets = HashMap::<String, String>::new();
 
     for rule in profile.rules.iter().filter(|rule| rule.enabled) {
-        let matches = discover_assets(&config.source_root, &rule.select)?;
+        let matches = discover_assets(&profile.source_root, &rule.select)?;
         if matches.is_empty() {
             diagnostics.push(ConfigDiagnostic {
                 code: "asset_not_found",
                 message: format!(
                     "rule select '{}' matched no assets under {}",
                     rule.select,
-                    config.source_root.display()
+                    profile.source_root.display()
                 ),
             });
             continue;
@@ -171,21 +173,19 @@ fn validate_raw_config(raw: RawConfig, config_dir: PathBuf) -> Result<Config> {
     }
 
     let source_root = resolve_input_path(&raw.source_root, &config_dir)?;
-    if !source_root.is_absolute() {
-        bail!("source_root must be an absolute path");
-    }
-    if !source_root.exists() {
-        bail!("source_root '{}' does not exist", source_root.display());
-    }
-    if !source_root.is_dir() {
-        bail!(
-            "source_root '{}' must be a directory",
-            source_root.display()
-        );
-    }
+    validate_source_root(&source_root, "source_root")?;
 
     let mut profiles = BTreeMap::new();
     for (name, profile) in raw.profiles {
+        let profile_source_root = match profile.source_root {
+            Some(path) => {
+                let path = resolve_input_path(&path, &config_dir)?;
+                validate_source_root(&path, &format!("profile '{name}' source_root"))?;
+                normalize(&path)
+            }
+            None => normalize(&source_root),
+        };
+
         let mut rules = Vec::new();
         for (index, rule) in profile.rules.into_iter().enumerate() {
             if rule.select.trim().is_empty() {
@@ -247,7 +247,13 @@ fn validate_raw_config(raw: RawConfig, config_dir: PathBuf) -> Result<Config> {
             });
         }
 
-        profiles.insert(name, Profile { rules });
+        profiles.insert(
+            name,
+            Profile {
+                source_root: profile_source_root,
+                rules,
+            },
+        );
     }
 
     Ok(Config {
@@ -256,6 +262,20 @@ fn validate_raw_config(raw: RawConfig, config_dir: PathBuf) -> Result<Config> {
         config_dir: normalize(&config_dir),
         profiles,
     })
+}
+
+fn validate_source_root(source_root: &Path, label: &str) -> Result<()> {
+    if !source_root.is_absolute() {
+        bail!("{label} must be an absolute path");
+    }
+    if !source_root.exists() {
+        bail!("{label} '{}' does not exist", source_root.display());
+    }
+    if !source_root.is_dir() {
+        bail!("{label} '{}' must be a directory", source_root.display());
+    }
+
+    Ok(())
 }
 
 fn discover_assets(source_root: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
