@@ -1,0 +1,15 @@
+version: 1
+source_root: __SOURCE_ROOT__
+
+profiles:
+  main:
+    rules:
+      - select: Skills/alpha
+        to:
+          - __DEST_ROOT__/skills/
+        mode: symlink
+      - select: Skills/beta
+        to:
+          - __DEST_ROOT__/skills/
+        mode: symlink
+        enabled: false

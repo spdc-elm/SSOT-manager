@@ -1,0 +1,22 @@
+version: 1
+source_root: /path/to/personal-harness-management
+
+profiles:
+  skill-global:
+    rules:
+      - select: Skills/[!.]*
+        to:
+          - /tmp/ssot-manager-example/skills/
+        mode: symlink
+
+      - select: Agents/assistant.md
+        to:
+          - /tmp/ssot-manager-example/AGENTS.md
+        mode: symlink
+
+  kg-local:
+    rules:
+      - select: KG_Local/Skills/[!.]*
+        to:
+          - /tmp/ssot-manager-example/kg-skills/
+        mode: symlink

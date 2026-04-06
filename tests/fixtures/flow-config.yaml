@@ -1,0 +1,21 @@
+version: 1
+source_root: __SOURCE_ROOT__
+
+profiles:
+  skill-global:
+    rules:
+      - select: Skills/*
+        to:
+          - __DEST_ROOT__/skills/
+        mode: symlink
+      - select: Notes/notes.md
+        to:
+          - __DEST_ROOT__/manual/notes.md
+        mode: symlink
+
+  skill-safe:
+    rules:
+      - select: Skills/alpha
+        to:
+          - __DEST_ROOT__/safe-skills/
+        mode: symlink

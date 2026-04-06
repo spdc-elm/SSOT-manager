@@ -1,0 +1,14 @@
+version: 1
+source_root: __SOURCE_ROOT__
+
+profiles:
+  main:
+    rules:
+      - select: Skills/*
+        to:
+          - __DEST_ROOT__/skills/
+        mode: symlink
+      - select: Agents/assistant.md
+        to:
+          - __DEST_ROOT__/AGENTS.md
+        mode: symlink
