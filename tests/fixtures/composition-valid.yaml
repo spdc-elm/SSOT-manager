@@ -6,6 +6,7 @@ compositions:
     output: build/prompts/AGENTS.generated.md
     variables:
       host: codex
+      kind: system
     inputs:
       - path: Agents/assistant.md
         wrapper:
@@ -18,42 +19,10 @@ compositions:
     renderer:
       kind: concat
       outer_wrapper:
-        before: "<prompt host=\"{{host}}\">\n"
+        before: "<prompt host=\"{{host}}\" kind=\"{{kind}}\">\n"
         after: "\n</prompt>\n"
 
 profiles:
-  skill-global:
-    rules:
-      - select: Skills/*
-        to:
-          - __DEST_ROOT__/skills/
-        mode: symlink
-      - select: Notes/notes.md
-        to:
-          - __DEST_ROOT__/manual/notes.md
-        mode: symlink
-
-  skill-safe:
-    rules:
-      - select: Skills/alpha
-        to:
-          - __DEST_ROOT__/safe-skills/
-        mode: symlink
-
-  copy-safe:
-    rules:
-      - select: Skills/alpha
-        to:
-          - __DEST_ROOT__/copied-skills/
-        mode: copy
-
-  hardlink-safe:
-    rules:
-      - select: Skills/alpha
-        to:
-          - __DEST_ROOT__/hardlinked-skills/
-        mode: hardlink
-
   prompted:
     requires:
       - agent

@@ -1,0 +1,101 @@
+version: 1
+source_root: ../..
+
+compositions:
+  codex-system-prompt:
+    output: build/prompts/codex/AGENTS.generated.md
+    variables:
+      host: codex
+    inputs:
+      - path: Agents/assistant.md
+        wrapper:
+          before: "<assistant_spec path=\"{{path}}\">\n"
+          after: "\n</assistant_spec>\n"
+      - path: USER.md
+        wrapper:
+          before: "<who_you_help_with>\nthis is who you help with:\n<user_profile path=\"{{path}}\">\n"
+          after: "\n</user_profile>\n</who_you_help_with>\n"
+    renderer:
+      kind: concat
+      outer_wrapper:
+        before: "<system_prompt host=\"{{host}}\">\n"
+        after: "\n</system_prompt>\n"
+
+profiles:
+  codex-global:
+    requires:
+      - codex-system-prompt
+    rules:
+      - select: Skills/[!.]*
+        to:
+          - ~/.agents/skills/
+        mode: symlink
+      - select: build/prompts/codex/AGENTS.generated.md
+        to:
+          - ~/.codex/AGENTS.md
+        mode: symlink
+
+  opencode-global:
+    rules:
+      - select: Agents/[!.]*
+        to:
+          - ~/.config/opencode/agents/
+        mode: symlink
+      - select: Skills/[!.]*
+        to:
+          - ~/.config/opencode/skills/
+        mode: symlink
+      - select: Commands/[!.]*
+        to:
+          - ~/.config/opencode/commands/
+        mode: symlink
+
+  opencode-sandbox-copy:
+    rules:
+      - select: Agents/[!.]*
+        to:
+          - /tmp/ssot-manager-sync-prompts/opencode/agents/
+        mode: copy
+      - select: Skills/[!.]*
+        to:
+          - /tmp/ssot-manager-sync-prompts/opencode/skills/
+        mode: copy
+      - select: Commands/[!.]*
+        to:
+          - /tmp/ssot-manager-sync-prompts/opencode/commands/
+        mode: copy
+
+  antigravity-global:
+    rules:
+      - select: Skills/[!.]*
+        to:
+          - ~/.gemini/antigravity/skills/
+        mode: symlink
+      - select: Commands/[!.]*
+        to:
+          - ~/.gemini/antigravity/global_workflows/
+        mode: symlink
+
+  kglocal-project:
+    rules:
+      - select: KG_Local/Agents/[!.]*
+        to:
+          - .opencode/agent/
+        mode: symlink
+      - select: KG_Local/Commands/[!.]*
+        to:
+          - .opencode/commands/
+          - .agent/workflows/
+        mode: symlink
+      - select: KG_Local/Skills/[!.]*
+        to:
+          - .claude/skills/
+          - .agent/skills/
+        mode: symlink
+
+  project-global-skills:
+    rules:
+      - select: Skills/[!.]*
+        to:
+          - .agents/skills/
+        mode: symlink

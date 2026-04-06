@@ -240,6 +240,55 @@ fn hardlink_mode_creates_linked_tree_and_doctor_detects_relation_drift() {
     assert!(!target_file.exists());
 }
 
+#[test]
+fn prompted_profile_plan_blocks_when_required_composition_is_missing() {
+    let harness = Harness::new();
+
+    let output = bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("profile")
+        .arg("plan")
+        .arg("prompted")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+
+    assert!(stdout.contains("danger"));
+    assert!(stdout.contains("required composition 'agent' is missing"));
+    assert!(stdout.contains("build/prompts/AGENTS.generated.md"));
+}
+
+#[test]
+fn prompted_profile_apply_blocks_when_required_composition_is_stale() {
+    let harness = Harness::new();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("prompt")
+        .arg("build")
+        .arg("agent")
+        .assert()
+        .success();
+
+    fs::write(harness.source_root().join("USER.md"), "user updated").unwrap();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("profile")
+        .arg("apply")
+        .arg("prompted")
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains("required composition 'agent' is stale"))
+        .stderr(predicates::str::contains("danger actions"));
+}
+
 struct Harness {
     temp: TempDir,
     config_path: PathBuf,
@@ -253,10 +302,13 @@ impl Harness {
 
         fs::create_dir_all(source_root.join("Skills/alpha")).unwrap();
         fs::create_dir_all(source_root.join("Skills/beta")).unwrap();
+        fs::create_dir_all(source_root.join("Agents")).unwrap();
         fs::create_dir_all(source_root.join("Notes")).unwrap();
         fs::write(source_root.join("Skills/alpha/SKILL.md"), "# alpha").unwrap();
         fs::write(source_root.join("Skills/beta/SKILL.md"), "# beta").unwrap();
+        fs::write(source_root.join("Agents/assistant.md"), "assistant").unwrap();
         fs::write(source_root.join("Notes/notes.md"), "notes").unwrap();
+        fs::write(source_root.join("USER.md"), "user").unwrap();
         fs::create_dir_all(&dest_root).unwrap();
 
         let template = fs::read_to_string(Path::new("tests/fixtures/flow-config.yaml")).unwrap();

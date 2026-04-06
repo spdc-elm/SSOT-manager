@@ -1,15 +1,38 @@
 version: 1
 source_root: ../..
 
+compositions:
+  codex-agent:
+    output: build/prompts/codex/AGENTS.generated.md
+    variables:
+      host: codex
+      prompt_kind: system
+    inputs:
+      - path: Agents/assistant.md
+        wrapper:
+          before: "<assistant path=\"{{path}}\">\n"
+          after: "\n</assistant>\n"
+      - path: USER.md
+        wrapper:
+          before: "<user path=\"{{path}}\">\n"
+          after: "\n</user>\n"
+    renderer:
+      kind: concat
+      outer_wrapper:
+        before: "<prompt host=\"{{host}}\" kind=\"{{prompt_kind}}\">\n"
+        after: "\n</prompt>\n"
+
 profiles:
   skill-global:
+    requires:
+      - codex-agent
     rules:
       - select: Skills/[!.]*
         to:
           - /tmp/ssot-manager-example/skills/
         mode: symlink
 
-      - select: Agents/assistant.md
+      - select: build/prompts/codex/AGENTS.generated.md
         to:
           - /tmp/ssot-manager-example/AGENTS.md
         mode: symlink

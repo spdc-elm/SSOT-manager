@@ -10,14 +10,15 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::Widget;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Text};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap};
 
 use crate::config::Config;
 use crate::inspection::{
     ProfileExplainView, ProfileShowView, explain_profile, list_profiles, show_profile,
 };
+use crate::prompt::build_profile_requirements;
 use crate::reconcile::{apply_plan, build_plan, doctor_profile, undo_last_apply};
 use crate::state::{ManagedState, StateStore};
 
@@ -144,6 +145,26 @@ impl TuiApp {
         Ok(())
     }
 
+    fn compile_required_compositions(&mut self) -> Result<()> {
+        let Some(profile_name) = self.selected_profile_name().map(str::to_string) else {
+            self.message = "No profile selected".to_string();
+            return Ok(());
+        };
+
+        let result = build_profile_requirements(&self.config, &profile_name)?;
+        if result.built.is_empty() {
+            self.message = format!("No prompt prerequisites for '{}'", profile_name);
+        } else {
+            self.message = format!(
+                "Compiled {} prompt prerequisites for '{}'",
+                result.built.len(),
+                profile_name
+            );
+        }
+
+        Ok(())
+    }
+
     fn show_view(&self) -> Result<Option<ProfileShowView>> {
         self.selected_profile_name()
             .map(|profile_name| show_profile(&self.config, profile_name))
@@ -214,6 +235,7 @@ fn run_event_loop(terminal: &mut AppTerminal, app: &mut TuiApp) -> Result<()> {
                     app.active_view = app.active_view.previous()
                 }
                 KeyCode::Char('r') => handle_app_action(app, |app| app.refresh())?,
+                KeyCode::Char('c') => handle_app_action(app, |app| app.compile_required_compositions())?,
                 KeyCode::Char('a') => handle_app_action(app, |app| app.apply_selected())?,
                 KeyCode::Char('u') => handle_app_action(app, |app| app.undo())?,
                 _ => {}
@@ -259,9 +281,12 @@ fn draw_ui(area: Rect, buf: &mut ratatui::buffer::Buffer, app: &TuiApp) {
     render_detail(body[1], buf, app);
 
     let footer = Paragraph::new(Text::from(vec![
-        Line::from(format!("Status: {}", app.message)),
+        Line::from(vec![
+            Span::raw("Status: "),
+            Span::styled(app.message.clone(), style_for_message(&app.message)),
+        ]),
         Line::from(
-            "Keys: q quit | j/k or Up/Down move | Tab or h/l switch view | a apply | u undo | r refresh",
+            "Keys: q quit | j/k or Up/Down move | Tab or h/l switch view | c compile deps | a apply | u undo | r refresh",
         ),
     ]))
         .block(Block::default().borders(Borders::ALL).title("Status / Keys"))
@@ -310,103 +335,197 @@ fn render_detail(area: Rect, buf: &mut ratatui::buffer::Buffer, app: &TuiApp) {
             .show_view()
             .map(|view| {
                 view.map(render_show_text)
-                    .unwrap_or_else(|| "No profile selected".to_string())
+                    .unwrap_or_else(|| Text::from("No profile selected"))
             })
-            .unwrap_or_else(|error| format!("Error: {error:#}")),
+            .unwrap_or_else(|error| Text::from(format!("Error: {error:#}"))),
         DetailView::Plan => app
             .plan_view()
             .map(|view| {
                 view.map(render_plan_text)
-                    .unwrap_or_else(|| "No profile selected".to_string())
+                    .unwrap_or_else(|| Text::from("No profile selected"))
             })
-            .unwrap_or_else(|error| format!("Error: {error:#}")),
+            .unwrap_or_else(|error| Text::from(format!("Error: {error:#}"))),
         DetailView::Doctor => app
             .doctor_view()
-            .map(|view| view.unwrap_or_else(|| "No profile selected".to_string()))
-            .unwrap_or_else(|error| format!("Error: {error:#}")),
+            .map(|view| render_doctor_text(view.unwrap_or_else(|| "No profile selected".to_string())))
+            .unwrap_or_else(|error| Text::from(format!("Error: {error:#}"))),
     };
 
-    let paragraph = Paragraph::new(Text::from(text))
+    let paragraph = Paragraph::new(text)
         .block(Block::default().borders(Borders::ALL).title("Detail"))
         .wrap(Wrap { trim: false });
     paragraph.render(detail[1], buf);
 }
 
-fn render_show_text(view: ProfileShowView) -> String {
+fn render_show_text(view: ProfileShowView) -> Text<'static> {
     let mut lines = vec![
-        format!("Profile '{}'", view.profile_name),
-        format!("source_root={}", view.source_root),
-        format!(
+        Line::from(format!("Profile '{}'", view.profile_name)),
+        Line::from(format!("source_root={}", view.source_root)),
+        Line::from(format!(
             "rules={} enabled={} disabled={}",
             view.rule_count, view.enabled_rule_count, view.disabled_rule_count
-        ),
+        )),
     ];
+
+    if view.required_compositions.is_empty() {
+        lines.push(Line::from("requires: none"));
+    } else {
+        lines.push(Line::from("requires:"));
+        for requirement in view.required_compositions {
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {} [", requirement.name)),
+                Span::styled(
+                    requirement.status.clone(),
+                    style_for_requirement_status(&requirement.status),
+                ),
+                Span::raw(format!("] {} ({})", requirement.output, requirement.message)),
+            ]));
+        }
+    }
 
     for rule in view.rules {
-        lines.push(format!(
+        lines.push(Line::from(format!(
             "rule {} select={} mode={} enabled={}",
             rule.index, rule.select, rule.mode, rule.enabled
-        ));
+        )));
         for destination in rule.destinations {
-            lines.push(format!("  to {destination}"));
+            lines.push(Line::from(format!("  to {destination}")));
         }
         if !rule.tags.is_empty() {
-            lines.push(format!("  tags {}", rule.tags.join(",")));
+            lines.push(Line::from(format!("  tags {}", rule.tags.join(","))));
         }
         if let Some(note) = rule.note {
-            lines.push(format!("  note {note}"));
+            lines.push(Line::from(format!("  note {note}")));
         }
     }
 
-    lines.join("\n")
+    Text::from(lines)
 }
 
-fn render_plan_text(view: ProfileExplainView) -> String {
+fn render_plan_text(view: ProfileExplainView) -> Text<'static> {
     let mut lines = vec![
-        format!("Explain '{}'", view.profile_name),
-        format!("source_root={}", view.source_root),
+        Line::from(format!("Explain '{}'", view.profile_name)),
+        Line::from(format!("source_root={}", view.source_root)),
     ];
 
-    if view.diagnostics.is_empty() {
-        lines.push("diagnostics: none".to_string());
+    if view.required_compositions.is_empty() {
+        lines.push(Line::from("required compositions: none"));
     } else {
-        lines.push("diagnostics:".to_string());
-        for diagnostic in view.diagnostics {
-            lines.push(format!("  [{}] {}", diagnostic.code, diagnostic.message));
+        lines.push(Line::from("required compositions:"));
+        for requirement in view.required_compositions {
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {} [", requirement.name)),
+                Span::styled(
+                    requirement.status.clone(),
+                    style_for_requirement_status(&requirement.status),
+                ),
+                Span::raw(format!("] {} ({})", requirement.output, requirement.message)),
+            ]));
         }
     }
 
-    let summary = ["create", "update", "remove", "skip", "warning", "danger"]
+    if view.diagnostics.is_empty() {
+        lines.push(Line::from("diagnostics: none"));
+    } else {
+        lines.push(Line::from("diagnostics:"));
+        for diagnostic in view.diagnostics {
+            lines.push(Line::from(vec![
+                Span::raw("  ["),
+                Span::styled(diagnostic.code, Style::default().fg(Color::Yellow)),
+                Span::raw(format!("] {}", diagnostic.message)),
+            ]));
+        }
+    }
+
+    let mut summary_spans = vec![Span::raw("plan summary: ")];
+    for (index, action) in ["create", "update", "remove", "skip", "warning", "danger"]
         .into_iter()
-        .map(|action| {
+        .enumerate()
+    {
+        if index > 0 {
+            summary_spans.push(Span::raw(" "));
+        }
+        summary_spans.push(Span::styled(
             format!(
                 "{action}={}",
                 view.plan_summary.get(action).copied().unwrap_or_default()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    lines.push(format!("plan summary: {summary}"));
+            ),
+            style_for_action_name(action),
+        ));
+    }
+    lines.push(Line::from(summary_spans));
 
     if view.plan_items.is_empty() {
-        lines.push("plan items: none".to_string());
+        lines.push(Line::from("plan items: none"));
     } else {
-        lines.push("plan items:".to_string());
+        lines.push(Line::from("plan items:"));
         for item in view.plan_items {
             match item.desired_source {
-                Some(source) => lines.push(format!(
-                    "  {} {} -> {} ({})",
-                    item.action, item.target, source, item.reason
-                )),
-                None => lines.push(format!(
-                    "  {} {} ({})",
-                    item.action, item.target, item.reason
-                )),
+                Some(source) => lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{:<7}", item.action),
+                        style_for_action_name(&item.action),
+                    ),
+                    Span::raw(format!(" {} -> {} ({})", item.target, source, item.reason)),
+                ])),
+                None => lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{:<7}", item.action),
+                        style_for_action_name(&item.action),
+                    ),
+                    Span::raw(format!(" {} ({})", item.target, item.reason)),
+                ])),
             }
         }
     }
 
-    lines.join("\n")
+    Text::from(lines)
+}
+
+fn render_doctor_text(view: String) -> Text<'static> {
+    let has_issue = view.contains("issues for");
+    let style = if has_issue {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default().fg(Color::Green)
+    };
+    let lines = view
+        .lines()
+        .map(|line| Line::from(Span::styled(line.to_string(), style)))
+        .collect::<Vec<_>>();
+    Text::from(lines)
+}
+
+fn style_for_requirement_status(status: &str) -> Style {
+    match status {
+        "ready" => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        "stale" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        "missing" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        _ => Style::default(),
+    }
+}
+
+fn style_for_action_name(action: &str) -> Style {
+    match action {
+        "create" | "skip" => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        "update" | "remove" | "warning" => {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        }
+        "danger" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        _ => Style::default(),
+    }
+}
+
+fn style_for_message(message: &str) -> Style {
+    if message.starts_with("Error:") || message.contains("danger") {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else if message.contains("Compiled") || message.contains("Applied") || message == "Ready" {
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Yellow)
+    }
 }
 
 fn setup_terminal() -> Result<AppTerminal> {
@@ -447,6 +566,7 @@ mod tests {
         assert!(rendered.contains("Profile 'primary'"));
         assert!(rendered.contains("Status: Ready"));
         assert!(rendered.contains("a apply"));
+        assert!(rendered.contains("c compile deps"));
     }
 
     #[test]
@@ -502,6 +622,35 @@ mod tests {
         assert!(rendered.contains("Status: Applied 'primary'"));
     }
 
+    #[test]
+    fn show_view_includes_prompt_prerequisites_for_selected_profile() {
+        let harness = Harness::new();
+        let mut app = TuiApp::new(harness.config(), harness.store()).unwrap();
+        app.select_next();
+
+        let rendered = text_to_plain_string(&render_show_text(app.show_view().unwrap().unwrap()));
+
+        assert!(rendered.contains("requires:"));
+        assert!(rendered.contains("agent [missing]"));
+        assert!(rendered.contains("build/prompts/AGENTS.generated.md"));
+    }
+
+    #[test]
+    fn compile_required_compositions_updates_message_and_materializes_output() {
+        let harness = Harness::new();
+        let mut app = TuiApp::new(harness.config(), harness.store()).unwrap();
+        app.select_next();
+
+        app.compile_required_compositions().unwrap();
+
+        assert!(app.message.contains("Compiled 1 prompt prerequisites for 'prompted'"));
+        assert!(harness
+            .temp
+            .path()
+            .join("source/build/prompts/AGENTS.generated.md")
+            .exists());
+    }
+
     fn buffer_to_string(buffer: &Buffer) -> String {
         let mut out = String::new();
         for y in 0..buffer.area.height {
@@ -511,6 +660,14 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    fn text_to_plain_string(text: &Text<'_>) -> String {
+        text.lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     struct Harness {
@@ -525,9 +682,12 @@ mod tests {
             let dest_root = temp.path().join("dest");
 
             fs::create_dir_all(source_root.join("Skills/alpha")).unwrap();
+            fs::create_dir_all(source_root.join("Agents")).unwrap();
             fs::create_dir_all(source_root.join("Notes")).unwrap();
             fs::write(source_root.join("Skills/alpha/SKILL.md"), "# alpha").unwrap();
+            fs::write(source_root.join("Agents/assistant.md"), "assistant").unwrap();
             fs::write(source_root.join("Notes/notes.md"), "notes").unwrap();
+            fs::write(source_root.join("USER.md"), "user").unwrap();
             fs::create_dir_all(profile_root.join("Skills/secondary")).unwrap();
             fs::write(
                 profile_root.join("Skills/secondary/SKILL.md"),
@@ -537,8 +697,9 @@ mod tests {
             fs::create_dir_all(&dest_root).unwrap();
 
             let config = format!(
-                "version: 1\nsource_root: {}\n\nprofiles:\n  primary:\n    rules:\n      - select: Skills/*\n        to:\n          - {}/skills/\n        mode: symlink\n      - select: Notes/notes.md\n        to:\n          - {}/manual/notes.md\n        mode: symlink\n  secondary:\n    source_root: {}\n    rules:\n      - select: Skills/*\n        to:\n          - {}/secondary/\n        mode: symlink\n",
+                "version: 1\nsource_root: {}\n\ncompositions:\n  agent:\n    output: build/prompts/AGENTS.generated.md\n    variables:\n      host: codex\n    inputs:\n      - path: Agents/assistant.md\n        wrapper:\n          before: \"<assistant path=\\\"{{path}}\\\">\\n\"\n          after: \"\\n</assistant>\\n\"\n      - path: USER.md\n        wrapper:\n          before: \"<user path=\\\"{{path}}\\\">\\n\"\n          after: \"\\n</user>\\n\"\n    renderer:\n      kind: concat\n      outer_wrapper:\n        before: \"<prompt host=\\\"{{host}}\\\">\\n\"\n        after: \"\\n</prompt>\\n\"\n\nprofiles:\n  primary:\n    rules:\n      - select: Skills/*\n        to:\n          - {}/skills/\n        mode: symlink\n      - select: Notes/notes.md\n        to:\n          - {}/manual/notes.md\n        mode: symlink\n  prompted:\n    requires:\n      - agent\n    rules:\n      - select: build/prompts/AGENTS.generated.md\n        to:\n          - {}/AGENTS.md\n        mode: symlink\n  secondary:\n    source_root: {}\n    rules:\n      - select: Skills/*\n        to:\n          - {}/secondary/\n        mode: symlink\n",
                 source_root.display(),
+                dest_root.display(),
                 dest_root.display(),
                 dest_root.display(),
                 profile_root.display(),

@@ -9,6 +9,10 @@ use crate::inspection::{
     ProfileExplainView, ProfileListView, ProfileShowView, explain_profile, list_profiles,
     show_profile,
 };
+use crate::prompt::{
+    CompositionListView, CompositionShowView, build_composition, list_compositions,
+    preview_composition, show_composition,
+};
 use crate::reconcile::{Action, build_plan, doctor_profile, undo_last_apply};
 use crate::state::StateStore;
 
@@ -32,6 +36,10 @@ enum Commands {
     Profile {
         #[command(subcommand)]
         command: ProfileCommand,
+    },
+    Prompt {
+        #[command(subcommand)]
+        command: PromptCommand,
     },
     Tui,
     Undo,
@@ -69,6 +77,20 @@ enum ProfileCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum PromptCommand {
+    List,
+    Show {
+        name: String,
+    },
+    Preview {
+        name: String,
+    },
+    Build {
+        name: String,
+    },
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     let store = StateStore::new(cli.state_dir)?;
@@ -84,10 +106,11 @@ pub fn run() -> Result<()> {
                         .map(|profile| profile.rules.len())
                         .sum();
                     println!(
-                        "Config is valid: version={} profiles={} rules={}",
+                        "Config is valid: version={} profiles={} rules={} compositions={}",
                         config.version,
                         config.profiles.len(),
-                        rule_count
+                        rule_count,
+                        config.compositions.len()
                     );
                 }
             }
@@ -155,6 +178,31 @@ pub fn run() -> Result<()> {
                             );
                         }
                     }
+                }
+            }
+        }
+        Commands::Prompt { command } => {
+            let config = load_config(&cli.config)?;
+
+            match command {
+                PromptCommand::List => {
+                    let view = list_compositions(&config);
+                    print_prompt_list(&view);
+                }
+                PromptCommand::Show { name } => {
+                    let view = show_composition(&config, &name)?;
+                    print_prompt_show(&view);
+                }
+                PromptCommand::Preview { name } => {
+                    print!("{}", preview_composition(&config, &name)?);
+                }
+                PromptCommand::Build { name } => {
+                    let result = build_composition(&config, &name)?;
+                    println!(
+                        "Built composition '{}': {}",
+                        result.composition_name,
+                        result.output.display()
+                    );
                 }
             }
         }
@@ -248,6 +296,17 @@ fn print_profile_show(view: &ProfileShowView) {
         "- rules={} enabled={} disabled={}",
         view.rule_count, view.enabled_rule_count, view.disabled_rule_count
     );
+    if view.required_compositions.is_empty() {
+        println!("- requires: none");
+    } else {
+        println!("- requires:");
+        for requirement in &view.required_compositions {
+            println!(
+                "  - {} [{}] {} ({})",
+                requirement.name, requirement.status, requirement.output, requirement.message
+            );
+        }
+    }
     for rule in &view.rules {
         println!(
             "- rule {} select={} mode={} enabled={}",
@@ -268,6 +327,17 @@ fn print_profile_show(view: &ProfileShowView) {
 fn print_profile_explain(view: &ProfileExplainView) {
     println!("Explain profile '{}':", view.profile_name);
     println!("- source_root={}", view.source_root);
+    if view.required_compositions.is_empty() {
+        println!("Required compositions: none");
+    } else {
+        println!("Required compositions:");
+        for requirement in &view.required_compositions {
+            println!(
+                "- {} [{}] {} ({})",
+                requirement.name, requirement.status, requirement.output, requirement.message
+            );
+        }
+    }
 
     if view.diagnostics.is_empty() {
         println!("Diagnostics: none");
@@ -322,6 +392,49 @@ fn print_profile_explain(view: &ProfileExplainView) {
                 ),
                 None => println!("- {:<7} {} ({})", item.action, item.target, item.reason),
             }
+        }
+    }
+}
+
+fn print_prompt_list(view: &CompositionListView) {
+    if view.compositions.is_empty() {
+        println!("No prompt compositions configured");
+        return;
+    }
+
+    for composition in &view.compositions {
+        println!(
+            "- {} -> {} (inputs={})",
+            composition.name, composition.output, composition.input_count
+        );
+    }
+}
+
+fn print_prompt_show(view: &CompositionShowView) {
+    println!("Composition '{}':", view.composition_name);
+    println!("- output={}", view.output);
+    println!("- renderer={}", view.renderer_kind);
+    println!(
+        "- outer_wrapper before={:?} after={:?}",
+        view.outer_wrapper.before, view.outer_wrapper.after
+    );
+    if view.variables.is_empty() {
+        println!("- variables: none");
+    } else {
+        println!("- variables:");
+        for (key, value) in &view.variables {
+            println!("  - {}={}", key, value);
+        }
+    }
+    if view.inputs.is_empty() {
+        println!("- inputs: none");
+    } else {
+        println!("- inputs:");
+        for input in &view.inputs {
+            println!(
+                "  - {} path={} before={:?} after={:?}",
+                input.index, input.path, input.wrapper.before, input.wrapper.after
+            );
         }
     }
 }

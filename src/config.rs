@@ -15,12 +15,14 @@ pub struct Config {
     pub source_root: PathBuf,
     pub config_dir: PathBuf,
     pub profiles: BTreeMap<String, Profile>,
+    pub compositions: BTreeMap<String, Composition>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Profile {
     pub source_root: PathBuf,
     pub rules: Vec<Rule>,
+    pub requires: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +33,33 @@ pub struct Rule {
     pub enabled: bool,
     pub tags: Vec<String>,
     pub note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Composition {
+    pub name: String,
+    pub inputs: Vec<CompositionInput>,
+    pub variables: BTreeMap<String, String>,
+    pub renderer: PromptRenderer,
+    pub output: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompositionInput {
+    pub path: String,
+    pub resolved_path: PathBuf,
+    pub wrapper: TemplateWrapper,
+}
+
+#[derive(Debug, Clone)]
+pub struct TemplateWrapper {
+    pub before: String,
+    pub after: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum PromptRenderer {
+    Concat { outer_wrapper: TemplateWrapper },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -66,12 +95,16 @@ pub struct ConfigDiagnostic {
 struct RawConfig {
     version: u64,
     source_root: String,
+    #[serde(default)]
+    compositions: BTreeMap<String, RawComposition>,
     profiles: BTreeMap<String, RawProfile>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawProfile {
     source_root: Option<String>,
+    #[serde(default)]
+    requires: Vec<String>,
     #[serde(default)]
     rules: Vec<RawRule>,
 }
@@ -86,6 +119,36 @@ struct RawRule {
     #[serde(default)]
     tags: Vec<String>,
     note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawComposition {
+    #[serde(default)]
+    inputs: Vec<RawCompositionInput>,
+    #[serde(default)]
+    variables: BTreeMap<String, String>,
+    renderer: RawRenderer,
+    output: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawCompositionInput {
+    path: String,
+    wrapper: Option<RawTemplateWrapper>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTemplateWrapper {
+    #[serde(default)]
+    before: String,
+    #[serde(default)]
+    after: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawRenderer {
+    kind: String,
+    outer_wrapper: Option<RawTemplateWrapper>,
 }
 
 pub fn load_config(config_path: &Path) -> Result<Config> {
@@ -176,8 +239,11 @@ fn validate_raw_config(raw: RawConfig, config_dir: PathBuf) -> Result<Config> {
 
     let source_root = resolve_input_path(&raw.source_root, &config_dir)?;
     validate_source_root(&source_root, "source_root")?;
+    let source_root = normalize(&source_root);
 
+    let compositions = validate_compositions(raw.compositions, &source_root)?;
     let mut profiles = BTreeMap::new();
+
     for (name, profile) in raw.profiles {
         let profile_source_root = match profile.source_root {
             Some(path) => {
@@ -185,8 +251,17 @@ fn validate_raw_config(raw: RawConfig, config_dir: PathBuf) -> Result<Config> {
                 validate_source_root(&path, &format!("profile '{name}' source_root"))?;
                 normalize(&path)
             }
-            None => normalize(&source_root),
+            None => source_root.clone(),
         };
+
+        for required in &profile.requires {
+            if !compositions.contains_key(required) {
+                bail!(
+                    "profile '{name}' requires undefined composition '{}'",
+                    required
+                );
+            }
+        }
 
         let mut rules = Vec::new();
         for (index, rule) in profile.rules.into_iter().enumerate() {
@@ -212,18 +287,9 @@ fn validate_raw_config(raw: RawConfig, config_dir: PathBuf) -> Result<Config> {
                     )
                 })?;
 
-            let mode = match rule.mode.as_str() {
-                "symlink" => MaterializationMode::Symlink,
-                "copy" => MaterializationMode::Copy,
-                "hardlink" => MaterializationMode::Hardlink,
-                _ => {
-                    bail!(
-                        "profile '{name}' rule {} uses unknown mode '{}'",
-                        index + 1,
-                        rule.mode
-                    )
-                }
-            };
+            let mode = parse_materialization_mode(&rule.mode).with_context(|| {
+                format!("profile '{name}' rule {} uses invalid mode", index + 1)
+            })?;
 
             for destination in &rule.to {
                 if destination.trim().is_empty() {
@@ -249,16 +315,143 @@ fn validate_raw_config(raw: RawConfig, config_dir: PathBuf) -> Result<Config> {
             Profile {
                 source_root: profile_source_root,
                 rules,
+                requires: profile.requires,
             },
         );
     }
 
     Ok(Config {
         version: 1,
-        source_root: normalize(&source_root),
+        source_root,
         config_dir: normalize(&config_dir),
         profiles,
+        compositions,
     })
+}
+
+fn validate_compositions(
+    raw: BTreeMap<String, RawComposition>,
+    source_root: &Path,
+) -> Result<BTreeMap<String, Composition>> {
+    let mut compositions = BTreeMap::new();
+
+    for (name, composition) in raw {
+        if composition.inputs.is_empty() {
+            bail!("composition '{name}' has no inputs");
+        }
+        if composition.output.trim().is_empty() {
+            bail!("composition '{name}' has an empty output");
+        }
+
+        let output = resolve_input_path(&composition.output, source_root)?;
+        ensure_path_within_root(
+            &output,
+            source_root,
+            &format!("composition '{name}' output"),
+        )?;
+
+        let inputs = composition
+            .inputs
+            .into_iter()
+            .enumerate()
+            .map(|(index, input)| validate_composition_input(&name, index, input, source_root))
+            .collect::<Result<Vec<_>>>()?;
+
+        let renderer = validate_renderer(&name, composition.renderer)?;
+
+        compositions.insert(
+            name.clone(),
+            Composition {
+                name,
+                inputs,
+                variables: composition.variables,
+                renderer,
+                output: normalize(&output),
+            },
+        );
+    }
+
+    Ok(compositions)
+}
+
+fn validate_composition_input(
+    composition_name: &str,
+    index: usize,
+    input: RawCompositionInput,
+    source_root: &Path,
+) -> Result<CompositionInput> {
+    if input.path.trim().is_empty() {
+        bail!(
+            "composition '{}' input {} has an empty path",
+            composition_name,
+            index + 1
+        );
+    }
+
+    let resolved_path = resolve_input_path(&input.path, source_root)?;
+    ensure_path_within_root(
+        &resolved_path,
+        source_root,
+        &format!("composition '{}' input {}", composition_name, index + 1),
+    )?;
+
+    Ok(CompositionInput {
+        path: input.path,
+        resolved_path: normalize(&resolved_path),
+        wrapper: normalize_wrapper(input.wrapper),
+    })
+}
+
+fn validate_renderer(composition_name: &str, renderer: RawRenderer) -> Result<PromptRenderer> {
+    match renderer.kind.as_str() {
+        "concat" => Ok(PromptRenderer::Concat {
+            outer_wrapper: normalize_wrapper(renderer.outer_wrapper),
+        }),
+        "script" => bail!(
+            "composition '{}' uses unsupported renderer 'script'; scripted renderers are not yet supported",
+            composition_name
+        ),
+        other => bail!(
+            "composition '{}' uses unknown renderer '{}'",
+            composition_name,
+            other
+        ),
+    }
+}
+
+fn normalize_wrapper(raw: Option<RawTemplateWrapper>) -> TemplateWrapper {
+    let raw = raw.unwrap_or(RawTemplateWrapper {
+        before: String::new(),
+        after: String::new(),
+    });
+
+    TemplateWrapper {
+        before: raw.before,
+        after: raw.after,
+    }
+}
+
+fn parse_materialization_mode(raw: &str) -> Result<MaterializationMode> {
+    match raw {
+        "symlink" => Ok(MaterializationMode::Symlink),
+        "copy" => Ok(MaterializationMode::Copy),
+        "hardlink" => Ok(MaterializationMode::Hardlink),
+        other => bail!("uses unknown mode '{other}'"),
+    }
+}
+
+fn ensure_path_within_root(path: &Path, root: &Path, label: &str) -> Result<()> {
+    let path = normalize(path);
+    let root = normalize(root);
+    if !path.starts_with(&root) {
+        bail!(
+            "{label} '{}' must stay under {}",
+            path.display(),
+            root.display()
+        );
+    }
+
+    Ok(())
 }
 
 fn validate_source_root(source_root: &Path, label: &str) -> Result<()> {
@@ -335,6 +528,20 @@ impl MaterializationMode {
             MaterializationMode::Symlink => "symlink",
             MaterializationMode::Copy => "copy",
             MaterializationMode::Hardlink => "hardlink",
+        }
+    }
+}
+
+impl PromptRenderer {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PromptRenderer::Concat { .. } => "concat",
+        }
+    }
+
+    pub fn outer_wrapper(&self) -> &TemplateWrapper {
+        match self {
+            PromptRenderer::Concat { outer_wrapper } => outer_wrapper,
         }
     }
 }

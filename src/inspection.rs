@@ -5,7 +5,9 @@ use serde::Serialize;
 
 use crate::config::{Config, MaterializationMode, resolve_profile};
 use crate::paths::path_to_string;
-use crate::reconcile::{Action, build_plan_from_resolved};
+use crate::prompt::CompositionRequirementView;
+use crate::prompt::profile_requirements;
+use crate::reconcile::{Action, build_plan, build_plan_from_resolved};
 use crate::state::ManagedState;
 
 #[derive(Debug, Clone, Serialize)]
@@ -29,6 +31,7 @@ pub struct ProfileShowView {
     pub rule_count: usize,
     pub enabled_rule_count: usize,
     pub disabled_rule_count: usize,
+    pub required_compositions: Vec<CompositionRequirementView>,
     pub rules: Vec<RuleView>,
 }
 
@@ -47,6 +50,7 @@ pub struct RuleView {
 pub struct ProfileExplainView {
     pub profile_name: String,
     pub source_root: String,
+    pub required_compositions: Vec<CompositionRequirementView>,
     pub diagnostics: Vec<DiagnosticView>,
     pub intents: Vec<IntentView>,
     pub plan_summary: BTreeMap<String, usize>,
@@ -117,6 +121,7 @@ pub fn show_profile(config: &Config, profile_name: &str) -> Result<ProfileShowVi
             note: rule.note.clone(),
         })
         .collect();
+    let required_compositions = profile_requirements(config, profile_name)?;
 
     Ok(ProfileShowView {
         profile_name: profile_name.to_string(),
@@ -124,6 +129,7 @@ pub fn show_profile(config: &Config, profile_name: &str) -> Result<ProfileShowVi
         rule_count: profile.rules.len(),
         enabled_rule_count,
         disabled_rule_count,
+        required_compositions,
         rules,
     })
 }
@@ -139,26 +145,32 @@ pub fn explain_profile(
         .ok_or_else(|| anyhow!("unknown profile '{profile_name}'"))?
         .source_root
         .clone();
-    let resolved = resolve_profile(config, profile_name)?;
-
-    let diagnostics = resolved
-        .diagnostics
-        .iter()
-        .map(|diagnostic| DiagnosticView {
-            code: diagnostic.code.to_string(),
-            message: diagnostic.message.clone(),
-        })
-        .collect();
-    let intents = resolved
-        .intents
-        .iter()
-        .map(|intent| IntentView {
-            source: path_to_string(&intent.source),
-            target: path_to_string(&intent.target),
-            mode: materialization_mode_as_str(intent.mode).to_string(),
-        })
-        .collect();
-    let plan = build_plan_from_resolved(resolved, state)?;
+    let required_compositions = profile_requirements(config, profile_name)?;
+    let has_blocking_prerequisite = required_compositions.iter().any(|composition| composition.status != "ready");
+    let (diagnostics, intents, plan) = if has_blocking_prerequisite {
+        (Vec::new(), Vec::new(), build_plan(config, profile_name, state)?)
+    } else {
+        let resolved = resolve_profile(config, profile_name)?;
+        let diagnostics = resolved
+            .diagnostics
+            .iter()
+            .map(|diagnostic| DiagnosticView {
+                code: diagnostic.code.to_string(),
+                message: diagnostic.message.clone(),
+            })
+            .collect();
+        let intents = resolved
+            .intents
+            .iter()
+            .map(|intent| IntentView {
+                source: path_to_string(&intent.source),
+                target: path_to_string(&intent.target),
+                mode: materialization_mode_as_str(intent.mode).to_string(),
+            })
+            .collect();
+        let plan = build_plan_from_resolved(resolved, state)?;
+        (diagnostics, intents, plan)
+    };
     let mut plan_summary = BTreeMap::new();
 
     for action in [
@@ -191,6 +203,7 @@ pub fn explain_profile(
     Ok(ProfileExplainView {
         profile_name: profile_name.to_string(),
         source_root: path_to_string(&source_root),
+        required_compositions,
         diagnostics,
         intents,
         plan_summary,

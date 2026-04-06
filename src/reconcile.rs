@@ -7,6 +7,7 @@ use crate::config::{
     Config, ConfigDiagnostic, MaterializationMode, ResolvedProfile, SyncIntent, resolve_profile,
 };
 use crate::paths::path_to_string;
+use crate::prompt::profile_requirements;
 use crate::state::{
     ApplyJournal, JournalEntry, ManagedState, PathState, StateStore, build_record,
     materialize_target, now_timestamp, remove_existing_path, restore_from_source, restore_path,
@@ -72,6 +73,15 @@ pub struct UndoResult {
 }
 
 pub fn build_plan(config: &Config, profile_name: &str, state: &ManagedState) -> Result<Plan> {
+    let prerequisite_items = blocking_prerequisite_items(config, profile_name)?;
+    if !prerequisite_items.is_empty() {
+        return Ok(Plan {
+            profile_name: profile_name.to_string(),
+            items: prerequisite_items,
+            diagnostics: Vec::new(),
+        });
+    }
+
     let resolved = resolve_profile(config, profile_name)?;
     plan_from_resolved(resolved, state)
 }
@@ -379,6 +389,25 @@ pub(crate) fn build_plan_from_resolved(
     state: &ManagedState,
 ) -> Result<Plan> {
     plan_from_resolved(resolved, state)
+}
+
+fn blocking_prerequisite_items(config: &Config, profile_name: &str) -> Result<Vec<PlanItem>> {
+    let requirements = profile_requirements(config, profile_name)?;
+
+    Ok(requirements
+        .into_iter()
+        .filter(|requirement| requirement.status != "ready")
+        .map(|requirement| PlanItem {
+            action: Action::Danger,
+            target: PathBuf::from(requirement.output),
+            desired_source: None,
+            desired_mode: None,
+            reason: format!(
+                "required composition '{}' is {} ({})",
+                requirement.name, requirement.status, requirement.message
+            ),
+        })
+        .collect())
 }
 
 fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result<Plan> {

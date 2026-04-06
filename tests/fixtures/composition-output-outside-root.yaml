@@ -1,0 +1,18 @@
+version: 1
+source_root: __SOURCE_ROOT__
+
+compositions:
+  bad:
+    output: ../outside/generated.md
+    inputs:
+      - path: Agents/assistant.md
+    renderer:
+      kind: concat
+
+profiles:
+  main:
+    rules:
+      - select: Skills/*
+        to:
+          - __DEST_ROOT__/skills/
+        mode: symlink

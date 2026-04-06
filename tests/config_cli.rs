@@ -62,6 +62,59 @@ fn accepts_copy_and_hardlink_modes() {
 }
 
 #[test]
+fn validates_compositions_and_profile_requires() {
+    let fixture = prepare_fixture("composition-valid.yaml", |temp| {
+        fs::create_dir_all(temp.path().join("source/Agents")).unwrap();
+        fs::write(temp.path().join("source/Agents/assistant.md"), "assistant").unwrap();
+        fs::write(temp.path().join("source/USER.md"), "user").unwrap();
+    });
+
+    bin()
+        .arg("--config")
+        .arg(fixture.config_path())
+        .arg("config")
+        .arg("validate")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("compositions=1"));
+}
+
+#[test]
+fn rejects_composition_output_outside_source_root() {
+    let fixture = prepare_fixture("composition-output-outside-root.yaml", |temp| {
+        fs::create_dir_all(temp.path().join("source/Agents")).unwrap();
+        fs::write(temp.path().join("source/Agents/assistant.md"), "assistant").unwrap();
+        fs::create_dir_all(temp.path().join("dest")).unwrap();
+    });
+
+    bin()
+        .arg("--config")
+        .arg(fixture.config_path())
+        .arg("config")
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("must stay under"));
+}
+
+#[test]
+fn rejects_unknown_required_composition() {
+    let fixture = prepare_fixture("unknown-required-composition.yaml", |temp| {
+        fs::create_dir_all(temp.path().join("source/Skills/alpha")).unwrap();
+        fs::create_dir_all(temp.path().join("dest")).unwrap();
+    });
+
+    bin()
+        .arg("--config")
+        .arg(fixture.config_path())
+        .arg("config")
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("requires undefined composition"));
+}
+
+#[test]
 fn ignores_disabled_rules_when_planning() {
     let fixture = prepare_fixture("disabled-rule.yaml", |temp| {
         fs::create_dir_all(temp.path().join("source/Skills/alpha")).unwrap();
