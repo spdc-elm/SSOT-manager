@@ -53,6 +53,8 @@ The installer currently supports the published Unix release targets:
 
 By default it tries to reuse an existing `ssot-manager` location first. Otherwise it prefers a writable common bin directory that is already on `PATH`, such as `/usr/local/bin`, `/opt/homebrew/bin`, `~/.local/bin`, or `~/bin`. If none match, it falls back to `~/.local/bin`.
 
+The installed executable is currently `ssot-manager`. The CLI help text may still show `ssot` as the command name because that is the clap display name, but operators should not assume an `ssot` binary exists on `PATH`.
+
 ## Update
 
 There is no separate updater yet. Updating is the same operation as installing again:
@@ -98,6 +100,8 @@ Stored files:
 ## Example Config
 
 [`examples/personal-harness-management.yaml`](examples/personal-harness-management.yaml) assumes the asset repo lives next to this repo at `../personal-harness-management/` and syncs to `/tmp/ssot-manager-example/` so the workflow can be exercised without touching consumer config directories. The example shows a `codex-agent` composition that compiles `Agents/assistant.md` and `USER.md` from that asset repo into `build/prompts/codex/AGENTS.generated.md`, and a profile that declares `requires: [codex-agent]` before syncing that generated file.
+
+When authoring real configs, prefer explicit flat YAML over wildcard-heavy bundles when independent per-asset toggles matter. A good default is source-assets-first authoring: one applyable profile for a source bundle such as `skill-global`, one rule per source asset, and multiple `to` destinations on that rule when the same asset should sync to several consumers.
 
 If you compile generated assets into your repo, keep the generated path gitignored. The example uses `build/prompts/` for that reason.
 
