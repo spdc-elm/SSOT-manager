@@ -27,6 +27,11 @@ The system SHALL let the operator add, edit, reorder, and remove profile-local c
 - **WHEN** the operator edits a rule's destination list in the TUI
 - **THEN** the system allows managing the ordered `to` entries as structured list items instead of one freeform scalar field
 
+#### Scenario: Long collection popups advertise overflow state
+- **WHEN** a collection editor popup for `requires`, rules, rule destinations, or rule tags is taller than the visible popup viewport
+- **THEN** the system displays a visible overflow cue, such as a scrollbar or scrollbar-like position indicator, inside that popup
+- **AND** the cue updates as the operator moves through the collection
+
 ### Requirement: Nested profile editors return to their parent context
 The system SHALL treat nested editors in the profile editing flow as explicit layers. Leaving or completing a nested editor MUST return the operator to that editor's immediate parent context rather than closing the entire profile editor.
 

@@ -54,6 +54,13 @@ profiles:
           - __DEST_ROOT__/hardlinked-skills/
         mode: hardlink
 
+  self-ref-parent-symlink:
+    rules:
+      - select: Agents/assistant.md
+        to:
+          - __DEST_ROOT__/self-ref-parent/agents/
+        mode: symlink
+
   prompted:
     requires:
       - agent
