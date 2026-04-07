@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{self, Stdout};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -1935,7 +1935,7 @@ fn render_editor_detail(
 fn render_show_text(view: ProfileShowView) -> Text<'static> {
     let mut lines = vec![
         Line::from(format!("Profile '{}'", view.profile_name)),
-        Line::from(format!("source_root={}", view.source_root)),
+        Line::from(format!("source_root: {}", view.source_root)),
         Line::from(format!(
             "rules={} enabled={} disabled={}",
             view.rule_count, view.enabled_rule_count, view.disabled_rule_count
@@ -1963,9 +1963,12 @@ fn render_show_text(view: ProfileShowView) -> Text<'static> {
 
     for rule in view.rules {
         lines.push(Line::from(format!(
-            "rule {} select={} mode={} enabled={}",
-            rule.index, rule.select, rule.mode, rule.enabled
+            "rule {} [{}] {}",
+            rule.index,
+            rule.mode,
+            if rule.enabled { "enabled" } else { "disabled" }
         )));
+        lines.push(Line::from(format!("  select {}", rule.select)));
         for destination in rule.destinations {
             lines.push(Line::from(format!("  to {destination}")));
         }
@@ -1983,7 +1986,7 @@ fn render_show_text(view: ProfileShowView) -> Text<'static> {
 fn render_plan_text(view: ProfileExplainView) -> Text<'static> {
     let mut lines = vec![
         Line::from(format!("Explain '{}'", view.profile_name)),
-        Line::from(format!("source_root={}", view.source_root)),
+        Line::from(format!("source_root: {}", view.source_root)),
     ];
 
     if view.required_compositions.is_empty() {
@@ -2048,7 +2051,12 @@ fn render_plan_text(view: ProfileExplainView) -> Text<'static> {
                         action_label(&item.action, item.forceable),
                         style_for_action_name(&item.action),
                     ),
-                    Span::raw(format!(" {} -> {} ({})", item.target, source, item.reason)),
+                    Span::raw(format!(
+                        " {} <- {} ({})",
+                        item.target,
+                        format_path_under_root(&view.source_root, &source),
+                        item.reason
+                    )),
                 ])),
                 None => lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -2063,6 +2071,17 @@ fn render_plan_text(view: ProfileExplainView) -> Text<'static> {
     }
 
     Text::from(lines)
+}
+
+fn format_path_under_root(root: &str, path: &str) -> String {
+    let root = Path::new(root);
+    let path = Path::new(path);
+
+    match path.strip_prefix(root) {
+        Ok(relative) if relative.as_os_str().is_empty() => ".".to_string(),
+        Ok(relative) => format!("./{}", relative.display()),
+        Err(_) => path.display().to_string(),
+    }
 }
 
 fn render_doctor_text(view: String) -> Text<'static> {
@@ -2267,6 +2286,19 @@ mod tests {
         assert!(rendered.contains("requires:"));
         assert!(rendered.contains("agent [missing]"));
         assert!(rendered.contains("build/prompts/AGENTS.generated.md"));
+    }
+
+    #[test]
+    fn plan_view_shows_source_paths_relative_to_source_root() {
+        let harness = Harness::new();
+        let app = TuiApp::new(harness.config_doc(), harness.store()).unwrap();
+
+        let rendered = text_to_plain_string(&render_plan_text(app.plan_view().unwrap().unwrap()));
+        let source_root = harness.temp.path().join("source").display().to_string();
+
+        assert!(rendered.contains(&format!("source_root: {source_root}")));
+        assert!(rendered.contains("./Skills/alpha"));
+        assert_eq!(rendered.matches(&source_root).count(), 1);
     }
 
     #[test]

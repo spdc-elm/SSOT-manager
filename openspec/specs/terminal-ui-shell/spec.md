@@ -16,6 +16,7 @@ The system SHALL display structured views for the selected profile using the sam
 #### Scenario: TUI renders show, plan, and doctor data
 - **WHEN** the operator selects a profile in the terminal UI
 - **THEN** the system can display the profile's effective definition, current plan state, and doctor results without shelling out to parse CLI text output
+- **AND** the TUI can present the selected profile's `source_root` separately so repeated source-side paths may be shown relative to that root for readability
 
 ### Requirement: TUI can invoke existing safe reconcile actions
 The system SHALL let the operator trigger existing reconcile actions from the terminal UI while preserving the same safety rules as the CLI. If the selected profile plan contains only forceable dangers, the TUI SHALL support an explicit repeated-apply confirmation flow that force-applies with backup on the second confirmation instead of applying on the first keypress.
