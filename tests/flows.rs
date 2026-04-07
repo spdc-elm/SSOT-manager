@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
+use serde_json::Value;
 use tempfile::TempDir;
 
 fn bin() -> Command {
@@ -372,6 +373,37 @@ fn force_with_backup_replaces_unmanaged_targets_and_undo_restores_them() {
     let restored_link = fs::read_link(takeover_root.join("link.md")).unwrap();
     assert_eq!(restored_link, PathBuf::from("manual-target.txt"));
     assert!(!backup_root.exists());
+}
+
+#[test]
+fn force_with_backup_does_not_create_live_backup_artifacts_for_symlink_collisions() {
+    let harness = Harness::new();
+    let state_dir = harness.path().join("state");
+    harness.seed_takeover_collisions();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("takeover-safe")
+        .arg("--force-with-backup")
+        .assert()
+        .success();
+
+    let journal: Value =
+        serde_json::from_str(&fs::read_to_string(state_dir.join("last-apply.json")).unwrap())
+            .unwrap();
+    let entries = journal["entries"].as_array().unwrap();
+    let link_entry = entries
+        .iter()
+        .find(|entry| entry["target"].as_str().unwrap().ends_with("/takeover/link.md"))
+        .unwrap();
+
+    assert!(link_entry["before"]["kind"] == "symlink");
+    assert!(link_entry["backup_before"].is_null());
 }
 
 struct Harness {

@@ -470,7 +470,12 @@ pub fn create_backup_artifact(
 ) -> Result<Option<BackupArtifact>> {
     match target_state {
         PathState::Missing => Ok(None),
-        PathState::Symlink { .. } | PathState::File { .. } | PathState::Directory { .. } => {
+        // The journal's pre-apply symlink snapshot is already enough for undo.
+        // Avoid materializing a backup symlink on disk because that would keep a live
+        // pointer into the target tree and can be corrupted by later mutations in the
+        // same forced apply.
+        PathState::Symlink { .. } => Ok(None),
+        PathState::File { .. } | PathState::Directory { .. } => {
             let backup_path = backup_path_for(store, applied_at, index, target);
             if let Some(parent) = backup_path.parent() {
                 fs::create_dir_all(parent)
