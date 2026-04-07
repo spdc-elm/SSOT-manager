@@ -44,7 +44,15 @@ pub struct JournalEntry {
     pub record_before: Option<ManagedRecord>,
     #[serde(default)]
     pub record_before_source_state: Option<PathState>,
+    #[serde(default)]
+    pub backup_before: Option<BackupArtifact>,
     pub record_after: Option<ManagedRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupArtifact {
+    pub path: String,
+    pub state: PathState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +114,7 @@ impl StateStore {
 
     pub fn write_last_apply(&self, journal: &ApplyJournal) -> Result<()> {
         self.ensure_root()?;
+        self.remove_backup_artifacts_for_current_journal()?;
         write_json(&self.last_apply_path(), journal)
     }
 
@@ -123,6 +132,7 @@ impl StateStore {
     }
 
     pub fn clear_last_apply(&self) -> Result<()> {
+        self.remove_backup_artifacts_for_current_journal()?;
         let path = self.last_apply_path();
         if path.exists() {
             fs::remove_file(&path)
@@ -142,6 +152,57 @@ impl StateStore {
 
     fn last_apply_path(&self) -> PathBuf {
         self.root.join("last-apply.json")
+    }
+
+    fn backups_root(&self) -> PathBuf {
+        self.root.join("backups")
+    }
+
+    fn remove_backup_artifacts_for_current_journal(&self) -> Result<()> {
+        let path = self.last_apply_path();
+        if !path.exists() {
+            return Ok(());
+        }
+
+        let contents = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let journal: ApplyJournal = serde_json::from_str(&contents)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
+
+        for entry in journal.entries {
+            if let Some(backup) = entry.backup_before {
+                remove_existing_path(Path::new(&backup.path))?;
+            }
+        }
+
+        self.remove_empty_backup_dirs()?;
+
+        Ok(())
+    }
+
+    fn remove_empty_backup_dirs(&self) -> Result<()> {
+        let backups_root = self.backups_root();
+        if !backups_root.exists() {
+            return Ok(());
+        }
+
+        for entry in fs::read_dir(&backups_root)
+            .with_context(|| format!("failed to read {}", backups_root.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() && fs::read_dir(&path)?.next().is_none() {
+                fs::remove_dir(&path)
+                    .with_context(|| format!("failed to remove {}", path.display()))?;
+            }
+        }
+
+        if fs::read_dir(&backups_root)?.next().is_none() {
+            fs::remove_dir(&backups_root)
+                .with_context(|| format!("failed to remove {}", backups_root.display()))?;
+        }
+
+        Ok(())
     }
 }
 
@@ -400,6 +461,51 @@ pub fn restore_from_source(
     materialize_target(source, target, mode)
 }
 
+pub fn create_backup_artifact(
+    store: &StateStore,
+    applied_at: u64,
+    index: usize,
+    target: &Path,
+    target_state: &PathState,
+) -> Result<Option<BackupArtifact>> {
+    match target_state {
+        PathState::Missing => Ok(None),
+        PathState::Symlink { .. } | PathState::File { .. } | PathState::Directory { .. } => {
+            let backup_path = backup_path_for(store, applied_at, index, target);
+            if let Some(parent) = backup_path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            remove_existing_path(&backup_path)?;
+            materialize_copy(target, &backup_path)?;
+
+            Ok(Some(BackupArtifact {
+                path: path_to_string(&backup_path),
+                state: target_state.clone(),
+            }))
+        }
+        PathState::Other => bail!(
+            "cannot create backup artifact for unsupported content at {}",
+            target.display()
+        ),
+    }
+}
+
+pub fn restore_from_backup(target: &Path, backup: &BackupArtifact) -> Result<()> {
+    let backup_path = Path::new(&backup.path);
+    let current_backup_state = snapshot_path(backup_path)?;
+    if !path_state_content_matches(&current_backup_state, &backup.state) {
+        bail!(
+            "refusing to restore backup for {} because {} no longer matches the recorded backup state",
+            target.display(),
+            backup_path.display()
+        );
+    }
+
+    remove_existing_path(target)?;
+    materialize_copy(backup_path, target)
+}
+
 fn materialize_copy(source: &Path, target: &Path) -> Result<()> {
     materialize_tree(source, target, MaterializationMode::Copy)
 }
@@ -511,6 +617,19 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
         let _ = write!(&mut hex, "{byte:02x}");
     }
     hex
+}
+
+fn backup_path_for(store: &StateStore, applied_at: u64, index: usize, target: &Path) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(path_to_string(target).as_bytes());
+    hasher.update(applied_at.to_le_bytes());
+    hasher.update(index.to_le_bytes());
+    let digest = bytes_to_hex(&hasher.finalize());
+
+    store
+        .backups_root()
+        .join(applied_at.to_string())
+        .join(format!("{index:04}-{digest}"))
 }
 
 fn apply_permissions(target: &Path, metadata: &fs::Metadata) -> Result<()> {

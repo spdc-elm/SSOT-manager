@@ -62,3 +62,18 @@ profiles:
         to:
           - __DEST_ROOT__/AGENTS.md
         mode: symlink
+
+  takeover-safe:
+    rules:
+      - select: Notes/notes.md
+        to:
+          - __DEST_ROOT__/takeover/file.md
+        mode: copy
+      - select: Skills/alpha
+        to:
+          - __DEST_ROOT__/takeover/dir/
+        mode: symlink
+      - select: Notes/notes.md
+        to:
+          - __DEST_ROOT__/takeover/link.md
+        mode: symlink

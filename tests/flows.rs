@@ -289,6 +289,89 @@ fn prompted_profile_apply_blocks_when_required_composition_is_stale() {
         .stderr(predicates::str::contains("danger actions"));
 }
 
+#[test]
+fn ordinary_apply_still_blocks_forceable_danger_collisions() {
+    let harness = Harness::new();
+    let state_dir = harness.path().join("state");
+    harness.seed_takeover_collisions();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("takeover-safe")
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains("danger*"))
+        .stderr(predicates::str::contains("danger actions"));
+}
+
+#[test]
+fn force_with_backup_replaces_unmanaged_targets_and_undo_restores_them() {
+    let harness = Harness::new();
+    let state_dir = harness.path().join("state");
+    harness.seed_takeover_collisions();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("takeover-safe")
+        .arg("--force-with-backup")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("danger*"));
+
+    let takeover_root = harness.dest_root().join("takeover");
+    assert_eq!(
+        fs::read_to_string(takeover_root.join("file.md")).unwrap(),
+        "notes"
+    );
+    assert!(
+        fs::symlink_metadata(takeover_root.join("dir/alpha"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        fs::symlink_metadata(takeover_root.join("link.md"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    let backup_root = state_dir.join("backups");
+    assert!(backup_root.exists());
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("undo")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("targets reverted"));
+
+    assert_eq!(
+        fs::read_to_string(takeover_root.join("file.md")).unwrap(),
+        "manual file"
+    );
+    assert_eq!(
+        fs::read_to_string(takeover_root.join("dir/alpha/manual.txt")).unwrap(),
+        "manual dir"
+    );
+    let restored_link = fs::read_link(takeover_root.join("link.md")).unwrap();
+    assert_eq!(restored_link, PathBuf::from("manual-target.txt"));
+    assert!(!backup_root.exists());
+}
+
 struct Harness {
     temp: TempDir,
     config_path: PathBuf,
@@ -335,5 +418,16 @@ impl Harness {
 
     fn config_path(&self) -> &Path {
         &self.config_path
+    }
+
+    fn seed_takeover_collisions(&self) {
+        let takeover_root = self.dest_root().join("takeover");
+        fs::create_dir_all(&takeover_root).unwrap();
+        fs::write(takeover_root.join("file.md"), "manual file").unwrap();
+        fs::create_dir_all(takeover_root.join("dir/alpha")).unwrap();
+        fs::write(takeover_root.join("dir/alpha/manual.txt"), "manual dir").unwrap();
+        fs::write(takeover_root.join("manual-target.txt"), "manual target").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("manual-target.txt", takeover_root.join("link.md")).unwrap();
     }
 }

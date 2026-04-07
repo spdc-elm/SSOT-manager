@@ -19,7 +19,10 @@ use crate::inspection::{
     ProfileExplainView, ProfileShowView, explain_profile, list_profiles, show_profile,
 };
 use crate::prompt::build_profile_requirements;
-use crate::reconcile::{apply_plan, build_plan, doctor_profile, undo_last_apply};
+use crate::reconcile::{
+    apply_plan, apply_plan_force_with_backup, build_plan, can_force_with_backup, doctor_profile,
+    undo_last_apply,
+};
 use crate::state::{ManagedState, StateStore};
 
 type AppTerminal = Terminal<CrosstermBackend<Stdout>>;
@@ -69,6 +72,7 @@ pub struct TuiApp {
     selected_profile: usize,
     active_view: DetailView,
     message: String,
+    force_apply_armed_for: Option<String>,
 }
 
 impl TuiApp {
@@ -88,6 +92,7 @@ impl TuiApp {
             selected_profile: 0,
             active_view: DetailView::Show,
             message: "Ready".to_string(),
+            force_apply_armed_for: None,
         })
     }
 
@@ -96,12 +101,14 @@ impl TuiApp {
     }
 
     fn select_next(&mut self) {
+        self.force_apply_armed_for = None;
         if !self.profiles.is_empty() {
             self.selected_profile = (self.selected_profile + 1) % self.profiles.len();
         }
     }
 
     fn select_previous(&mut self) {
+        self.force_apply_armed_for = None;
         if !self.profiles.is_empty() {
             self.selected_profile = if self.selected_profile == 0 {
                 self.profiles.len() - 1
@@ -112,6 +119,7 @@ impl TuiApp {
     }
 
     fn refresh(&mut self) -> Result<()> {
+        self.force_apply_armed_for = None;
         self.state = self.store.load()?;
         self.message = "Refreshed state".to_string();
         Ok(())
@@ -124,7 +132,22 @@ impl TuiApp {
         };
         self.state = self.store.load()?;
         let plan = build_plan(&self.config, &profile_name, &self.state)?;
-        let result = apply_plan(plan, &self.state, &self.store)?;
+        let use_force = self.force_apply_armed_for.as_deref() == Some(profile_name.as_str());
+        if !use_force && can_force_with_backup(&plan) {
+            self.force_apply_armed_for = Some(profile_name.clone());
+            self.message = format!(
+                "Danger is forceable for '{}'. Press 'a' again to force overwrite with backup",
+                profile_name
+            );
+            return Ok(());
+        }
+        let result = if use_force {
+            let result = apply_plan_force_with_backup(plan, &self.state, &self.store);
+            self.force_apply_armed_for = None;
+            result?
+        } else {
+            apply_plan(plan, &self.state, &self.store)?
+        };
         self.state = self.store.load()?;
         self.message = format!(
             "Applied '{}' with {} journal entries",
@@ -135,6 +158,7 @@ impl TuiApp {
     }
 
     fn undo(&mut self) -> Result<()> {
+        self.force_apply_armed_for = None;
         let result = undo_last_apply(&self.store)?;
         self.state = self.store.load()?;
         self.message = format!(
@@ -146,6 +170,7 @@ impl TuiApp {
     }
 
     fn compile_required_compositions(&mut self) -> Result<()> {
+        self.force_apply_armed_for = None;
         let Some(profile_name) = self.selected_profile_name().map(str::to_string) else {
             self.message = "No profile selected".to_string();
             return Ok(());
@@ -464,7 +489,7 @@ fn render_plan_text(view: ProfileExplainView) -> Text<'static> {
                 Some(source) => lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
-                        format!("{:<7}", item.action),
+                        action_label(&item.action, item.forceable),
                         style_for_action_name(&item.action),
                     ),
                     Span::raw(format!(" {} -> {} ({})", item.target, source, item.reason)),
@@ -472,7 +497,7 @@ fn render_plan_text(view: ProfileExplainView) -> Text<'static> {
                 None => lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
-                        format!("{:<7}", item.action),
+                        action_label(&item.action, item.forceable),
                         style_for_action_name(&item.action),
                     ),
                     Span::raw(format!(" {} ({})", item.target, item.reason)),
@@ -525,6 +550,14 @@ fn style_for_message(message: &str) -> Style {
         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Yellow)
+    }
+}
+
+fn action_label(action: &str, forceable: bool) -> String {
+    if action == "danger" && forceable {
+        format!("{:<7}", "danger*")
+    } else {
+        format!("{:<7}", action)
     }
 }
 
@@ -594,7 +627,39 @@ mod tests {
 
         handle_app_action(&mut app, |app| app.apply_selected()).unwrap();
 
-        assert!(app.message.contains("danger actions"));
+        assert!(app.message.contains("Press 'a' again"));
+        assert_eq!(app.force_apply_armed_for.as_deref(), Some("primary"));
+    }
+
+    #[test]
+    fn second_apply_executes_force_with_backup_for_forceable_danger() {
+        let harness = Harness::new();
+        fs::create_dir_all(harness.dest_root().join("manual")).unwrap();
+        fs::write(harness.dest_root().join("manual/notes.md"), "manual").unwrap();
+        let mut app = TuiApp::new(harness.config(), harness.store()).unwrap();
+
+        handle_app_action(&mut app, |app| app.apply_selected()).unwrap();
+        handle_app_action(&mut app, |app| app.apply_selected()).unwrap();
+
+        assert!(app.message.contains("Applied 'primary'"));
+        assert!(app.force_apply_armed_for.is_none());
+        assert_eq!(
+            fs::read_to_string(harness.dest_root().join("manual/notes.md")).unwrap(),
+            "notes"
+        );
+    }
+
+    #[test]
+    fn force_confirmation_resets_when_selection_changes() {
+        let harness = Harness::new();
+        fs::create_dir_all(harness.dest_root().join("manual")).unwrap();
+        fs::write(harness.dest_root().join("manual/notes.md"), "manual").unwrap();
+        let mut app = TuiApp::new(harness.config(), harness.store()).unwrap();
+
+        handle_app_action(&mut app, |app| app.apply_selected()).unwrap();
+        app.select_next();
+
+        assert!(app.force_apply_armed_for.is_none());
     }
 
     #[test]

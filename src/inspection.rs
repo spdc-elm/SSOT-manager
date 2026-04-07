@@ -75,6 +75,7 @@ pub struct PlanItemView {
     pub action: String,
     pub target: String,
     pub desired_source: Option<String>,
+    pub forceable: bool,
     pub reason: String,
 }
 
@@ -195,6 +196,7 @@ pub fn explain_profile(
                 action: item.action.as_str().to_string(),
                 target: path_to_string(&item.target),
                 desired_source: item.desired_source.map(|source| path_to_string(&source)),
+                forceable: item.forceable,
                 reason: item.reason,
             }
         })

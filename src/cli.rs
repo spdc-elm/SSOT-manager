@@ -13,7 +13,10 @@ use crate::prompt::{
     CompositionListView, CompositionShowView, build_composition, list_compositions,
     preview_composition, show_composition,
 };
-use crate::reconcile::{Action, build_plan, doctor_profile, undo_last_apply};
+use crate::reconcile::{
+    Action, apply_plan, apply_plan_force_with_backup, build_plan, can_force_with_backup,
+    doctor_profile, undo_last_apply,
+};
 use crate::state::StateStore;
 
 #[derive(Debug, Parser)]
@@ -71,6 +74,8 @@ enum ProfileCommand {
     },
     Apply {
         name: String,
+        #[arg(long)]
+        force_with_backup: bool,
     },
     Doctor {
         name: String,
@@ -148,10 +153,21 @@ pub fn run() -> Result<()> {
                     let plan = build_plan(&config, &name, &state)?;
                     print_plan(&plan);
                 }
-                ProfileCommand::Apply { name } => {
+                ProfileCommand::Apply {
+                    name,
+                    force_with_backup,
+                } => {
                     let plan = build_plan(&config, &name, &state)?;
                     print_plan(&plan);
-                    let result = crate::reconcile::apply_plan(plan, &state, &store)?;
+                    let result = if force_with_backup {
+                        if can_force_with_backup(&plan) {
+                            apply_plan_force_with_backup(plan, &state, &store)?
+                        } else {
+                            apply_plan_force_with_backup(plan, &state, &store)?
+                        }
+                    } else {
+                        apply_plan(plan, &state, &store)?
+                    };
                     println!(
                         "Applied profile '{}': {} journal entries written to {}",
                         result.plan.profile_name,
@@ -231,17 +247,18 @@ fn print_plan(plan: &crate::reconcile::Plan) {
     }
 
     for item in &plan.items {
+        let action_label = action_label(item.action, item.forceable);
         match &item.desired_source {
             Some(source) => println!(
                 "- {:<7} {} -> {} ({})",
-                item.action.as_str(),
+                action_label,
                 item.target.display(),
                 source.display(),
                 item.reason
             ),
             None => println!(
                 "- {:<7} {} ({})",
-                item.action.as_str(),
+                action_label,
                 item.target.display(),
                 item.reason
             ),
@@ -385,12 +402,13 @@ fn print_profile_explain(view: &ProfileExplainView) {
     } else {
         println!("Plan items:");
         for item in &view.plan_items {
+            let action_label = action_label_from_view(&item.action, item.forceable);
             match &item.desired_source {
                 Some(source) => println!(
                     "- {:<7} {} -> {} ({})",
-                    item.action, item.target, source, item.reason
+                    action_label, item.target, source, item.reason
                 ),
-                None => println!("- {:<7} {} ({})", item.action, item.target, item.reason),
+                None => println!("- {:<7} {} ({})", action_label, item.target, item.reason),
             }
         }
     }
@@ -442,4 +460,16 @@ fn print_prompt_show(view: &CompositionShowView) {
 fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
+}
+
+fn action_label(action: Action, forceable: bool) -> String {
+    action_label_from_view(action.as_str(), forceable)
+}
+
+fn action_label_from_view(action: &str, forceable: bool) -> String {
+    if action == "danger" && forceable {
+        "danger*".to_string()
+    } else {
+        action.to_string()
+    }
 }

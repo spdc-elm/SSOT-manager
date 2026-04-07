@@ -21,6 +21,7 @@ cargo run -- --config examples/personal-harness-management.yaml profile show ski
 cargo run -- --config examples/personal-harness-management.yaml profile explain skill-global
 cargo run -- --config examples/personal-harness-management.yaml profile plan skill-global
 cargo run -- --config examples/personal-harness-management.yaml profile apply skill-global
+cargo run -- --config examples/personal-harness-management.yaml profile apply skill-global --force-with-backup
 cargo run -- --config examples/personal-harness-management.yaml profile doctor skill-global
 cargo run -- --config examples/personal-harness-management.yaml tui
 cargo run -- --config examples/personal-harness-management.yaml undo
@@ -34,8 +35,10 @@ The inspection commands also accept `--json` for machine-readable output.
 - Supported materialization modes are `symlink`, `copy`, and `hardlink`.
 - Supported prompt rendering is intentionally narrow: built-in `concat` with optional per-input and outer wrappers plus declared variable interpolation.
 - `profile apply` refuses any plan that contains `danger` actions.
+- `profile apply --force-with-backup` may replace unmanaged file, directory, or symlink collisions only when every danger in the plan is forceable.
 - Profiles that declare `requires` will block plan/apply when a required composition output is missing or stale.
 - Unmanaged files and directories are never overwritten silently.
+- Forced backup-overwrite actions store a restorable backup in the manager state directory so `undo` can restore the replaced unmanaged content.
 - Managed records and the last successful apply journal are written only after filesystem verification succeeds.
 - `undo` only touches targets that belong to the most recent successful apply journal.
 
@@ -50,6 +53,7 @@ Stored files:
 
 - `managed-records.json`: current ownership records keyed by target path
 - `last-apply.json`: the last successful apply journal used by `undo`
+- `backups/`: manager-owned restore artifacts for the current force-with-backup journal, when present
 
 ## Example Config
 
@@ -66,12 +70,14 @@ If you compile generated assets into your repo, keep the generated path gitignor
 - `profile list` shows the configured profiles and their effective source roots.
 - `profile show <name>` shows a profile's declared rules together with its required prompt compositions and their readiness.
 - `profile explain <name>` combines prerequisite status, profile resolution diagnostics, and the current reconcile plan so later UI layers can consume the same explanation model.
+- Forceable dangers are shown as `danger*` in CLI plan output so they remain dangerous by default but are distinguishable from non-forceable blockers.
 
 ## Thin TUI
 
 - `tui` opens a profile-centered terminal UI backed by the same library inspection and reconcile logic as the CLI.
 - Navigation: `Up`/`Down` or `j`/`k` changes the selected profile, `Tab`/`Left`/`Right` switches between `Show`, `Plan`, and `Doctor`.
 - Actions: `c` compiles the selected profile's required prompt compositions, `a` applies the selected profile, `u` runs `undo`, `r` refreshes state, and `q` quits.
+- If the current profile plan contains only forceable dangers, the first `a` arms backup-overwrite confirmation and the second `a` executes the forced apply.
 
 ## Explicit Non-Goals
 
