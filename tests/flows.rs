@@ -9,6 +9,19 @@ fn bin() -> Command {
     Command::cargo_bin("ssot-manager").expect("binary should build")
 }
 
+fn apply_hardlink_safe(harness: &Harness, state_dir: &Path) {
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("hardlink-safe")
+        .assert()
+        .success();
+}
+
 #[test]
 fn plan_reports_create_skip_and_danger() {
     let harness = Harness::new();
@@ -334,6 +347,174 @@ fn hardlink_mode_creates_linked_tree_and_doctor_detects_relation_drift() {
         .stdout(predicates::str::contains("targets reverted"));
 
     assert!(!target_file.exists());
+}
+
+#[test]
+fn hardlink_mode_updates_when_source_directory_gains_a_file() {
+    use std::os::unix::fs::MetadataExt;
+
+    let harness = Harness::new();
+    let state_dir = harness.path().join("state");
+    apply_hardlink_safe(&harness, &state_dir);
+
+    let source_file = harness.source_root().join("Skills/alpha/new-src.txt");
+    let target_file = harness.dest_root().join("hardlinked-skills/alpha/new-src.txt");
+    fs::write(&source_file, "src-new").unwrap();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("doctor")
+        .arg("hardlink-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("managed_drift"));
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("hardlink-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("update"));
+
+    let source_meta = fs::metadata(&source_file).unwrap();
+    let target_meta = fs::metadata(&target_file).unwrap();
+    assert!(target_meta.is_file());
+    assert_eq!(source_meta.ino(), target_meta.ino());
+    assert_eq!(source_meta.dev(), target_meta.dev());
+}
+
+#[test]
+fn hardlink_mode_updates_when_source_directory_loses_a_file() {
+    let harness = Harness::new();
+    let state_dir = harness.path().join("state");
+    apply_hardlink_safe(&harness, &state_dir);
+
+    let source_file = harness.source_root().join("Skills/alpha/notes.txt");
+    let target_file = harness.dest_root().join("hardlinked-skills/alpha/notes.txt");
+    fs::write(&source_file, "notes").unwrap();
+
+    apply_hardlink_safe(&harness, &state_dir);
+    fs::remove_file(&source_file).unwrap();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("doctor")
+        .arg("hardlink-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("managed_drift"));
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("hardlink-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("update"));
+
+    assert!(!source_file.exists());
+    assert!(!target_file.exists());
+}
+
+#[test]
+fn hardlink_mode_updates_when_target_directory_gains_an_extra_file() {
+    let harness = Harness::new();
+    let state_dir = harness.path().join("state");
+    apply_hardlink_safe(&harness, &state_dir);
+
+    let extra_target = harness
+        .dest_root()
+        .join("hardlinked-skills/alpha/extra-dst.txt");
+    fs::write(&extra_target, "dst-extra").unwrap();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("doctor")
+        .arg("hardlink-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("managed_drift"));
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("hardlink-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("update"));
+
+    assert!(!extra_target.exists());
+}
+
+#[test]
+fn hardlink_mode_updates_when_target_directory_loses_a_file() {
+    use std::os::unix::fs::MetadataExt;
+
+    let harness = Harness::new();
+    let state_dir = harness.path().join("state");
+    apply_hardlink_safe(&harness, &state_dir);
+
+    let source_file = harness.source_root().join("Skills/alpha/notes.txt");
+    let target_file = harness.dest_root().join("hardlinked-skills/alpha/notes.txt");
+    fs::write(&source_file, "notes").unwrap();
+
+    apply_hardlink_safe(&harness, &state_dir);
+    fs::remove_file(&target_file).unwrap();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("doctor")
+        .arg("hardlink-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("managed_drift"));
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("hardlink-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("update"));
+
+    let source_meta = fs::metadata(&source_file).unwrap();
+    let target_meta = fs::metadata(&target_file).unwrap();
+    assert!(target_meta.is_file());
+    assert_eq!(source_meta.ino(), target_meta.ino());
+    assert_eq!(source_meta.dev(), target_meta.dev());
 }
 
 #[test]
