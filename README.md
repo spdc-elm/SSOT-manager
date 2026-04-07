@@ -4,7 +4,7 @@ Rust implementation workspace for the SSOT manager MVP.
 
 - Scope: deterministic management of personal AI flavour assets as a single source of truth.
 - Core responsibilities: validate config, compile generated prompt assets, resolve a named profile, plan changes, apply safe materialization updates, detect drift, and undo the last successful apply.
-- Current design draft: [../draft.md](../draft.md)
+- Current design draft: [draft.md](draft.md)
 
 Config uses a global `source_root` by default, and a profile may optionally override it with `profiles.<name>.source_root` when a subset of rules should resolve from a different source directory. Prompt compositions live under the shared `source_root` and emit generated files there before sync.
 
@@ -57,7 +57,7 @@ Stored files:
 
 ## Example Config
 
-[`examples/personal-harness-management.yaml`](examples/personal-harness-management.yaml) uses relative paths so it can be run from this repo checkout and syncs to `/tmp/ssot-manager-example/` so the workflow can be exercised without touching consumer config directories. The example shows a `codex-agent` composition that compiles `Agents/assistant.md` and `USER.md` into `build/prompts/codex/AGENTS.generated.md`, and a profile that declares `requires: [codex-agent]` before syncing that generated file.
+[`examples/personal-harness-management.yaml`](examples/personal-harness-management.yaml) assumes the asset repo lives next to this repo at `../personal-harness-management/` and syncs to `/tmp/ssot-manager-example/` so the workflow can be exercised without touching consumer config directories. The example shows a `codex-agent` composition that compiles `Agents/assistant.md` and `USER.md` from that asset repo into `build/prompts/codex/AGENTS.generated.md`, and a profile that declares `requires: [codex-agent]` before syncing that generated file.
 
 If you compile generated assets into your repo, keep the generated path gitignored. The example uses `build/prompts/` for that reason.
 

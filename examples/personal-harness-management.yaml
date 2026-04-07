@@ -1,5 +1,5 @@
 version: 1
-source_root: ../..
+source_root: ../../personal-harness-management
 
 compositions:
   codex-agent:
@@ -38,7 +38,7 @@ profiles:
         mode: symlink
 
   kg-local:
-    source_root: ../../KG_Local
+    source_root: ../../personal-harness-management/KG_Local
     rules:
       - select: Skills/[!.]*
         to:
