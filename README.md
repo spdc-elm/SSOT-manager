@@ -30,6 +30,13 @@ cargo run -- --config examples/personal-harness-management.yaml undo
 Use `--state-dir <path>` if you want journals and managed records somewhere other than the default state directory.
 The inspection commands also accept `--json` for machine-readable output.
 
+## Path Resolution
+
+- Relative `source_root` values are resolved relative to the config file directory, not the shell's current working directory.
+- Relative `profiles.<name>.source_root` values follow the same rule.
+- Relative destination paths in `to` are also resolved relative to the config file directory.
+- `~/` expands from `HOME`.
+
 ## Safety Model
 
 - Supported materialization modes are `symlink`, `copy`, and `hardlink`.
