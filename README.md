@@ -30,6 +30,39 @@ cargo run -- --config examples/personal-harness-management.yaml undo
 Use `--state-dir <path>` if you want journals and managed records somewhere other than the default state directory.
 The inspection commands also accept `--json` for machine-readable output.
 
+## Install
+
+Download a published release asset manually, or install on Unix-like systems with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/spdc-elm/SSOT-manager/main/scripts/install.sh | sh
+```
+
+Useful variants:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/spdc-elm/SSOT-manager/main/scripts/install.sh | sh -s -- --version v0.1.0
+curl -fsSL https://raw.githubusercontent.com/spdc-elm/SSOT-manager/main/scripts/install.sh | sh -s -- --install-dir /usr/local/bin
+```
+
+The installer currently supports the published Unix release targets:
+
+- Linux x86_64
+- macOS x86_64
+- macOS aarch64
+
+By default it installs to `~/.local/bin`.
+
+## Update
+
+There is no separate updater yet. Updating is the same operation as installing again:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/spdc-elm/SSOT-manager/main/scripts/install.sh | sh
+```
+
+That fetches the latest GitHub Release and replaces the existing binary in place. To pin or roll back, rerun the installer with `--version <tag>`.
+
 ## Path Resolution
 
 - Relative `source_root` values are resolved relative to the config file directory, not the shell's current working directory.
