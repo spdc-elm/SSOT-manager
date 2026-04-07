@@ -119,11 +119,13 @@ If you compile generated assets into your repo, keep the generated path gitignor
 ## Thin TUI
 
 - `tui` opens a profile-centered terminal UI backed by the same library inspection and reconcile logic as the CLI.
-- Navigation: `Up`/`Down` or `j`/`k` changes the selected profile, `Tab`/`Left`/`Right` switches between `Show`, `Plan`, and `Doctor`.
+- Main shell modes: the TUI starts in profile-browse mode, where `Up`/`Down` or `j`/`k` changes the selected profile and the right pane stays as a live preview. Press `Enter` to focus the current detail pane for deeper reading, then use `Esc` to return to profile browsing without losing the selected profile or active tab.
+- Detail reading: while the detail pane is focused, `Up`/`Down` or `j`/`k` scrolls the right-hand content instead of changing profiles. `PageUp`/`PageDown`/`Home`/`End` still provide larger scrolling jumps, and long detail content now shows both a visible position indicator in the detail pane title and a scrollbar gutter.
+- View switching: `Tab`, `Left`, `Right`, and `l` keep switching between `Show`, `Plan`, and `Doctor`. In browse mode, `h` still moves to the previous tab; in detail focus, `h` first moves to the previous tab and only leaves detail focus when the current tab is already `Show`.
 - Inspection actions: `c` compiles the selected profile's required prompt compositions, `a` applies the selected profile, `u` runs `undo`, `r` refreshes state, and `q` quits.
 - Profile editing: `e` edits the selected profile, `n` creates a new profile, and `d` starts a delete confirmation for the selected profile.
 - Inside the profile editor: `j`/`k` moves between fields, `Enter` edits the selected field or opens a focused collection editor, `s` saves, and `Esc` backs out or opens an unsaved-changes confirmation.
-- Collection editors support add/edit/remove and in-place reordering with `J`/`K` for ordered items such as `requires`, rules, rule destinations, and rule tags.
+- Collection editors support add/edit/remove and in-place reordering with `J`/`K` for ordered items such as `requires`, rules, rule destinations, and rule tags, and long lists keep the selected entry visible inside the popup viewport with the same scrollbar gutter treatment used by the inspect pane.
 - If the current profile plan contains only forceable dangers, the first `a` arms backup-overwrite confirmation and the second `a` executes the forced apply.
 - Saving from the TUI rewrites the YAML config in normalized form. Comments and original formatting are not preserved after a TUI save.
 

@@ -21,6 +21,7 @@ The system SHALL let the operator add, edit, reorder, and remove profile-local c
 #### Scenario: Add and remove profile rules
 - **WHEN** the operator edits a profile's rule list in the TUI
 - **THEN** the system allows adding a new rule draft and removing an existing rule without leaving the profile edit flow
+- **AND** the active rule remains visible inside the popup when the rule list is taller than the available viewport
 
 #### Scenario: Edit rule destinations as a collection
 - **WHEN** the operator edits a rule's destination list in the TUI
