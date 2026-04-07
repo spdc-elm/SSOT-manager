@@ -53,6 +53,8 @@ The installer currently supports the published Unix release targets:
 
 By default it tries to reuse an existing `ssot-manager` location first. Otherwise it prefers a writable common bin directory that is already on `PATH`, such as `/usr/local/bin`, `/opt/homebrew/bin`, `~/.local/bin`, or `~/bin`. If none match, it falls back to `~/.local/bin`.
 
+The installed executable is currently `ssot-manager`. The CLI help text may still show `ssot` as the command name because that is the clap display name, but operators should not assume an `ssot` binary exists on `PATH`.
+
 ## Update
 
 There is no separate updater yet. Updating is the same operation as installing again:
@@ -99,6 +101,8 @@ Stored files:
 
 [`examples/personal-harness-management.yaml`](examples/personal-harness-management.yaml) assumes the asset repo lives next to this repo at `../personal-harness-management/` and syncs to `/tmp/ssot-manager-example/` so the workflow can be exercised without touching consumer config directories. The example shows a `codex-agent` composition that compiles `Agents/assistant.md` and `USER.md` from that asset repo into `build/prompts/codex/AGENTS.generated.md`, and a profile that declares `requires: [codex-agent]` before syncing that generated file.
 
+When authoring real configs, prefer explicit flat YAML over wildcard-heavy bundles when independent per-asset toggles matter. A good default is source-assets-first authoring: one applyable profile for a source bundle such as `skill-global`, one rule per source asset, and multiple `to` destinations on that rule when the same asset should sync to several consumers.
+
 If you compile generated assets into your repo, keep the generated path gitignored. The example uses `build/prompts/` for that reason.
 
 ## Inspection Workflow
@@ -115,11 +119,13 @@ If you compile generated assets into your repo, keep the generated path gitignor
 ## Thin TUI
 
 - `tui` opens a profile-centered terminal UI backed by the same library inspection and reconcile logic as the CLI.
-- Navigation: `Up`/`Down` or `j`/`k` changes the selected profile, `Tab`/`Left`/`Right` switches between `Show`, `Plan`, and `Doctor`.
+- Main shell modes: the TUI starts in profile-browse mode, where `Up`/`Down` or `j`/`k` changes the selected profile and the right pane stays as a live preview. Press `Enter` to focus the current detail pane for deeper reading, then use `Esc` to return to profile browsing without losing the selected profile or active tab.
+- Detail reading: while the detail pane is focused, `Up`/`Down` or `j`/`k` scrolls the right-hand content instead of changing profiles. `PageUp`/`PageDown`/`Home`/`End` still provide larger scrolling jumps, and long detail content now shows both a visible position indicator in the detail pane title and a scrollbar gutter.
+- View switching: `Tab`, `Left`, `Right`, and `l` keep switching between `Show`, `Plan`, and `Doctor`. In browse mode, `h` still moves to the previous tab; in detail focus, `h` first moves to the previous tab and only leaves detail focus when the current tab is already `Show`.
 - Inspection actions: `c` compiles the selected profile's required prompt compositions, `a` applies the selected profile, `u` runs `undo`, `r` refreshes state, and `q` quits.
 - Profile editing: `e` edits the selected profile, `n` creates a new profile, and `d` starts a delete confirmation for the selected profile.
 - Inside the profile editor: `j`/`k` moves between fields, `Enter` edits the selected field or opens a focused collection editor, `s` saves, and `Esc` backs out or opens an unsaved-changes confirmation.
-- Collection editors support add/edit/remove and in-place reordering with `J`/`K` for ordered items such as `requires`, rules, rule destinations, and rule tags.
+- Collection editors support add/edit/remove and in-place reordering with `J`/`K` for ordered items such as `requires`, rules, rule destinations, and rule tags, and long lists keep the selected entry visible inside the popup viewport with the same scrollbar gutter treatment used by the inspect pane.
 - If the current profile plan contains only forceable dangers, the first `a` arms backup-overwrite confirmation and the second `a` executes the forced apply.
 - Saving from the TUI rewrites the YAML config in normalized form. Comments and original formatting are not preserved after a TUI save.
 

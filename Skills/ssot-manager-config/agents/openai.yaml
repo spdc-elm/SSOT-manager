@@ -1,0 +1,4 @@
+interface:
+  display_name: "SSOT Config"
+  short_description: "Write SSOT Manager config files"
+  default_prompt: "Use $ssot-manager-config to draft or revise an SSOT Manager config for this asset layout."
