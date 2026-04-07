@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use crate::config::{
     Config, ConfigDiagnostic, MaterializationMode, ResolvedProfile, SyncIntent, resolve_profile,
 };
-use crate::paths::path_to_string;
+use crate::paths::{effective_target_path, normalize, path_to_string};
 use crate::prompt::profile_requirements;
 use crate::state::{
     ApplyJournal, JournalEntry, ManagedState, PathState, StateStore, build_record,
@@ -522,10 +522,27 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
     let mut desired_targets = BTreeSet::new();
 
     for intent in &resolved.intents {
-        let current = snapshot_path(&intent.target)?;
         let target_key = path_to_string(&intent.target);
-        let record = state.records.get(&target_key);
         desired_targets.insert(target_key.clone());
+        let effective_target = effective_target_path(&intent.target)?;
+        if paths_overlap(&effective_target, &intent.source) {
+            items.push(PlanItem {
+                action: Action::Danger,
+                target: intent.target.clone(),
+                desired_source: Some(intent.source.clone()),
+                desired_mode: Some(intent.mode),
+                forceable: false,
+                reason: format!(
+                    "target resolves to {} which overlaps managed source {}",
+                    effective_target.display(),
+                    intent.source.display()
+                ),
+            });
+            continue;
+        }
+
+        let current = snapshot_path(&intent.target)?;
+        let record = state.records.get(&target_key);
 
         let item = if target_matches_source(&intent.source, &intent.target, &current, intent.mode)?
         {
@@ -687,6 +704,12 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
         items,
         diagnostics: resolved.diagnostics,
     })
+}
+
+fn paths_overlap(left: &Path, right: &Path) -> bool {
+    let left = normalize(left);
+    let right = normalize(right);
+    left.starts_with(&right) || right.starts_with(&left)
 }
 
 fn desired_target_map(plan: &Plan) -> BTreeMap<String, (PathBuf, MaterializationMode)> {

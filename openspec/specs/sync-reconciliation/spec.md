@@ -25,6 +25,19 @@ The system MUST treat an existing target that is not recorded as managed and wou
 - **WHEN** a desired target path contains an unmanaged file, directory, or symlink that the manager can replace via backup overwrite
 - **THEN** the generated plan still marks that target as `danger` rather than downgrading it to a safe action
 
+### Requirement: Planner blocks self-referential source and target overlap
+The system SHALL detect when a target's effective materialization path overlaps the desired source path, including overlap introduced by symlinked ancestor directories, and it SHALL classify that target as a non-forceable `danger`.
+
+#### Scenario: Parent symlink makes the target resolve back into the source tree
+- **WHEN** a desired target path appears separate textually but resolves into the source asset path or source subtree because one of its existing ancestor directories is a symlink
+- **THEN** the generated plan marks that target as `danger`
+- **AND** that danger is not forceable through the backup-overwrite apply path
+
+#### Scenario: Ordinary apply refuses self-referential overlap
+- **WHEN** a profile plan contains a self-referential source/target overlap danger
+- **THEN** ordinary apply aborts before mutating the target
+- **AND** the reported reason identifies the source/target overlap rather than a generic unmanaged collision
+
 ### Requirement: Apply executes only safe planned actions and verifies results
 The system SHALL execute filesystem mutations only from the computed plan, refuse to apply `danger` actions by default, and verify after mutation that each changed target matches the expected managed source asset under the declared materialization mode. For directory assets, `copy` MUST create an equivalent directory tree with copied file contents, and `hardlink` MUST create an equivalent directory tree whose leaf files are hardlinked to the corresponding source files. The system SHALL support an explicit force-with-backup apply path that may replace forceable `danger` targets only after recording a restorable backup of the unmanaged content.
 
@@ -54,4 +67,3 @@ The system SHALL evaluate every composition named in a profile's `requires` list
 #### Scenario: Stale required composition blocks profile apply
 - **WHEN** a profile declares a required composition whose generated output is stale
 - **THEN** the system refuses profile apply until that composition has been rebuilt
-

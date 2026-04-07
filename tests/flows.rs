@@ -121,6 +121,101 @@ fn apply_refuses_unmanaged_collision() {
 }
 
 #[test]
+fn self_referential_parent_symlink_plans_as_non_forceable_danger() {
+    let harness = Harness::new();
+    harness.seed_self_referential_parent_symlink();
+
+    let output = bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("profile")
+        .arg("plan")
+        .arg("self-ref-parent-symlink")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+
+    assert!(stdout.contains("danger"));
+    assert!(!stdout.contains("danger*"));
+    assert!(stdout.contains("self-ref-parent/agents/assistant.md"));
+    assert!(stdout.contains("overlaps managed source"));
+}
+
+#[test]
+fn self_referential_parent_symlink_apply_refuses_before_mutation() {
+    let harness = Harness::new();
+    let state_dir = harness.path().join("state");
+    harness.seed_self_referential_parent_symlink();
+
+    let source_file = harness.source_root().join("Agents/assistant.md");
+    let original_source = fs::read_to_string(&source_file).unwrap();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("self-ref-parent-symlink")
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains("overlaps managed source"))
+        .stderr(predicates::str::contains("danger actions"));
+
+    assert_eq!(fs::read_to_string(&source_file).unwrap(), original_source);
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("self-ref-parent-symlink")
+        .arg("--force-with-backup")
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains("overlaps managed source"))
+        .stderr(predicates::str::contains("non-forceable danger actions"));
+
+    assert_eq!(fs::read_to_string(&source_file).unwrap(), original_source);
+}
+
+#[test]
+fn ordinary_matching_leaf_symlink_without_ancestor_overlap_still_skips() {
+    let harness = Harness::new();
+    fs::create_dir_all(harness.dest_root().join("safe-skills")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        harness.source_root().join("Skills/alpha"),
+        harness.dest_root().join("safe-skills/alpha"),
+    )
+    .unwrap();
+
+    let output = bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("profile")
+        .arg("plan")
+        .arg("skill-safe")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+
+    assert!(stdout.contains("safe-skills/alpha"));
+    assert!(stdout.contains("target already matches the desired materialization"));
+    assert!(stdout.contains("skip=1"));
+    assert!(stdout.contains("danger=0"));
+}
+
+#[test]
 fn copy_mode_updates_plan_reports_drift_and_blocks_undo_after_target_edit() {
     let harness = Harness::new();
     let state_dir = harness.path().join("state");
@@ -399,7 +494,12 @@ fn force_with_backup_does_not_create_live_backup_artifacts_for_symlink_collision
     let entries = journal["entries"].as_array().unwrap();
     let link_entry = entries
         .iter()
-        .find(|entry| entry["target"].as_str().unwrap().ends_with("/takeover/link.md"))
+        .find(|entry| {
+            entry["target"]
+                .as_str()
+                .unwrap()
+                .ends_with("/takeover/link.md")
+        })
         .unwrap();
 
     assert!(link_entry["before"]["kind"] == "symlink");
@@ -463,5 +563,16 @@ impl Harness {
         fs::write(takeover_root.join("manual-target.txt"), "manual target").unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink("manual-target.txt", takeover_root.join("link.md")).unwrap();
+    }
+
+    fn seed_self_referential_parent_symlink(&self) {
+        let self_ref_root = self.dest_root().join("self-ref-parent");
+        fs::create_dir_all(&self_ref_root).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            self.source_root().join("Agents"),
+            self_ref_root.join("agents"),
+        )
+        .unwrap();
     }
 }
