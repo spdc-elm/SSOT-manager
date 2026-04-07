@@ -23,6 +23,16 @@ The system SHALL let the operator switch between profile-list browsing and focus
 - **THEN** the system returns navigation focus to the profile list instead of leaving the TUI or clearing the current preview
 - **AND** the selected profile and active inspection tab remain unchanged
 
+#### Scenario: H moves to the previous inspection tab before leaving detail focus
+- **WHEN** the operator is inspecting a focused detail pane on the `Doctor` or `Plan` tab and presses `h`
+- **THEN** the system switches to the previous inspection tab
+- **AND** the detail pane remains focused
+
+#### Scenario: H leaves detail focus from the leftmost inspection tab
+- **WHEN** the operator is inspecting a focused detail pane on the `Show` tab and presses `h`
+- **THEN** the system returns navigation focus to the profile list
+- **AND** the selected profile remains unchanged
+
 #### Scenario: Focus changes the meaning of vertical navigation keys
 - **WHEN** the operator presses `j`/`k` or `Up`/`Down` in the main shell
 - **THEN** those keys move between profiles while the profile list is focused
@@ -39,7 +49,7 @@ The system SHALL display structured views for the selected profile using the sam
 
 #### Scenario: Scrollable detail advertises overflow state
 - **WHEN** the active inspection content is taller than the visible detail viewport
-- **THEN** the system displays a visible overflow cue or position indicator in the detail pane
+- **THEN** the system displays a visible overflow cue, such as a scrollbar or scrollbar-like position indicator, in the detail pane
 - **AND** that cue updates as the operator scrolls through the detail content
 
 ### Requirement: TUI can invoke existing safe reconcile actions
