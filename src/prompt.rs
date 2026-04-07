@@ -125,7 +125,10 @@ pub fn preview_composition(config: &Config, composition_name: &str) -> Result<St
     Ok(render_composition(config, composition_name)?.content)
 }
 
-pub fn build_composition(config: &Config, composition_name: &str) -> Result<BuildCompositionResult> {
+pub fn build_composition(
+    config: &Config,
+    composition_name: &str,
+) -> Result<BuildCompositionResult> {
     let compiled = render_composition(config, composition_name)?;
     if let Some(parent) = compiled.output.parent() {
         fs::create_dir_all(parent)

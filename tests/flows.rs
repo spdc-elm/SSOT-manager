@@ -285,7 +285,9 @@ fn prompted_profile_apply_blocks_when_required_composition_is_stale() {
         .arg("prompted")
         .assert()
         .failure()
-        .stdout(predicates::str::contains("required composition 'agent' is stale"))
+        .stdout(predicates::str::contains(
+            "required composition 'agent' is stale",
+        ))
         .stderr(predicates::str::contains("danger actions"));
 }
 

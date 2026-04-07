@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use crate::config::load_config;
+use crate::config::{load_config, load_editable_config};
 use crate::inspection::{
     ProfileExplainView, ProfileListView, ProfileShowView, explain_profile, list_profiles,
     show_profile,
@@ -85,15 +85,9 @@ enum ProfileCommand {
 #[derive(Debug, Subcommand)]
 enum PromptCommand {
     List,
-    Show {
-        name: String,
-    },
-    Preview {
-        name: String,
-    },
-    Build {
-        name: String,
-    },
+    Show { name: String },
+    Preview { name: String },
+    Build { name: String },
 }
 
 pub fn run() -> Result<()> {
@@ -223,7 +217,7 @@ pub fn run() -> Result<()> {
             }
         }
         Commands::Tui => {
-            let config = load_config(&cli.config)?;
+            let config = load_editable_config(&cli.config)?;
             crate::tui::run_tui(config, store)?;
         }
         Commands::Undo => {

@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use globset::{Glob, GlobBuilder};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::paths::{normalize, path_to_string, resolve_input_path};
@@ -12,6 +13,7 @@ use crate::paths::{normalize, path_to_string, resolve_input_path};
 #[derive(Debug, Clone)]
 pub struct Config {
     pub version: u64,
+    pub config_path: PathBuf,
     pub source_root: PathBuf,
     pub config_dir: PathBuf,
     pub profiles: BTreeMap<String, Profile>,
@@ -91,83 +93,134 @@ pub struct ConfigDiagnostic {
     pub message: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct RawConfig {
-    version: u64,
-    source_root: String,
-    #[serde(default)]
-    compositions: BTreeMap<String, RawComposition>,
-    profiles: BTreeMap<String, RawProfile>,
+#[derive(Debug, Clone)]
+pub struct EditableConfigDocument {
+    pub path: PathBuf,
+    pub config_dir: PathBuf,
+    pub config: EditableConfig,
 }
 
-#[derive(Debug, Deserialize)]
-struct RawProfile {
-    source_root: Option<String>,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditableConfig {
+    pub version: u64,
+    pub source_root: String,
     #[serde(default)]
-    requires: Vec<String>,
-    #[serde(default)]
-    rules: Vec<RawRule>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub compositions: BTreeMap<String, EditableComposition>,
+    pub profiles: BTreeMap<String, EditableProfile>,
 }
 
-#[derive(Debug, Deserialize)]
-struct RawRule {
-    select: String,
-    to: Vec<String>,
-    mode: String,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditableProfile {
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_root: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<EditableRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditableRule {
+    pub select: String,
+    pub to: Vec<String>,
+    pub mode: String,
     #[serde(default = "default_true")]
-    enabled: bool,
+    #[serde(skip_serializing_if = "is_true")]
+    pub enabled: bool,
     #[serde(default)]
-    tags: Vec<String>,
-    note: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct RawComposition {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditableComposition {
     #[serde(default)]
-    inputs: Vec<RawCompositionInput>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<EditableCompositionInput>,
     #[serde(default)]
-    variables: BTreeMap<String, String>,
-    renderer: RawRenderer,
-    output: String,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub variables: BTreeMap<String, String>,
+    pub renderer: EditableRenderer,
+    pub output: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct RawCompositionInput {
-    path: String,
-    wrapper: Option<RawTemplateWrapper>,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditableCompositionInput {
+    pub path: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrapper: Option<EditableTemplateWrapper>,
 }
 
-#[derive(Debug, Deserialize)]
-struct RawTemplateWrapper {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditableTemplateWrapper {
     #[serde(default)]
-    before: String,
+    pub before: String,
     #[serde(default)]
-    after: String,
+    pub after: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct RawRenderer {
-    kind: String,
-    outer_wrapper: Option<RawTemplateWrapper>,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditableRenderer {
+    pub kind: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outer_wrapper: Option<EditableTemplateWrapper>,
 }
 
 pub fn load_config(config_path: &Path) -> Result<Config> {
-    let config_path = if config_path.is_absolute() {
-        config_path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(config_path)
-    };
+    let document = load_editable_config(config_path)?;
+    validate_editable_config(&document)
+}
 
+pub fn load_editable_config(config_path: &Path) -> Result<EditableConfigDocument> {
+    let config_path = resolve_config_path(config_path)?;
     let contents = fs::read_to_string(&config_path)
         .with_context(|| format!("failed to read config {}", config_path.display()))?;
-    let raw: RawConfig = serde_yaml::from_str(&contents)
+    let config: EditableConfig = serde_yaml::from_str(&contents)
         .with_context(|| format!("failed to parse YAML {}", config_path.display()))?;
     let config_dir = config_path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    validate_raw_config(raw, config_dir)
+    Ok(EditableConfigDocument {
+        path: config_path,
+        config_dir: normalize(&config_dir),
+        config,
+    })
+}
+
+pub fn validate_editable_config(document: &EditableConfigDocument) -> Result<Config> {
+    validate_editable_config_at(&document.config, &document.path)
+}
+
+pub fn validate_editable_config_at(config: &EditableConfig, config_path: &Path) -> Result<Config> {
+    let config_path = resolve_config_path(config_path)?;
+    let config_dir = config_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    validate_editable_config_model(config, &config_path, &config_dir)
+}
+
+pub fn write_editable_config(document: &EditableConfigDocument) -> Result<()> {
+    let contents = serde_yaml::to_string(&document.config)
+        .context("failed to serialize editable config to YAML")?;
+    atomic_write_text(&document.path, &contents)
+}
+
+pub fn validate_and_write_editable_config(document: &EditableConfigDocument) -> Result<Config> {
+    let config = validate_editable_config(document)?;
+    write_editable_config(document)?;
+    Ok(config)
 }
 
 pub fn resolve_profile(config: &Config, profile_name: &str) -> Result<ResolvedProfile> {
@@ -232,7 +285,11 @@ pub fn resolve_profile(config: &Config, profile_name: &str) -> Result<ResolvedPr
     })
 }
 
-fn validate_raw_config(raw: RawConfig, config_dir: PathBuf) -> Result<Config> {
+fn validate_editable_config_model(
+    raw: &EditableConfig,
+    config_path: &Path,
+    config_dir: &Path,
+) -> Result<Config> {
     if raw.version != 1 {
         bail!("unsupported config version '{}'; expected 1", raw.version);
     }
@@ -241,12 +298,16 @@ fn validate_raw_config(raw: RawConfig, config_dir: PathBuf) -> Result<Config> {
     validate_source_root(&source_root, "source_root")?;
     let source_root = normalize(&source_root);
 
-    let compositions = validate_compositions(raw.compositions, &source_root)?;
+    let compositions = validate_compositions(&raw.compositions, &source_root)?;
     let mut profiles = BTreeMap::new();
 
-    for (name, profile) in raw.profiles {
+    for (name, profile) in &raw.profiles {
+        if name.trim().is_empty() {
+            bail!("profile names must not be empty");
+        }
+
         let profile_source_root = match profile.source_root {
-            Some(path) => {
+            Some(ref path) => {
                 let path = resolve_input_path(&path, &config_dir)?;
                 validate_source_root(&path, &format!("profile '{name}' source_root"))?;
                 normalize(&path)
@@ -264,7 +325,7 @@ fn validate_raw_config(raw: RawConfig, config_dir: PathBuf) -> Result<Config> {
         }
 
         let mut rules = Vec::new();
-        for (index, rule) in profile.rules.into_iter().enumerate() {
+        for (index, rule) in profile.rules.iter().enumerate() {
             if rule.select.trim().is_empty() {
                 bail!("profile '{name}' rule {} has an empty select", index + 1);
             }
@@ -301,36 +362,37 @@ fn validate_raw_config(raw: RawConfig, config_dir: PathBuf) -> Result<Config> {
             }
 
             rules.push(Rule {
-                select: rule.select,
-                to: rule.to,
+                select: rule.select.clone(),
+                to: rule.to.clone(),
                 mode,
                 enabled: rule.enabled,
-                tags: rule.tags,
-                note: rule.note,
+                tags: rule.tags.clone(),
+                note: rule.note.clone(),
             });
         }
 
         profiles.insert(
-            name,
+            name.clone(),
             Profile {
                 source_root: profile_source_root,
                 rules,
-                requires: profile.requires,
+                requires: profile.requires.clone(),
             },
         );
     }
 
     Ok(Config {
-        version: 1,
+        version: raw.version,
+        config_path: normalize(config_path),
         source_root,
-        config_dir: normalize(&config_dir),
+        config_dir: normalize(config_dir),
         profiles,
         compositions,
     })
 }
 
 fn validate_compositions(
-    raw: BTreeMap<String, RawComposition>,
+    raw: &BTreeMap<String, EditableComposition>,
     source_root: &Path,
 ) -> Result<BTreeMap<String, Composition>> {
     let mut compositions = BTreeMap::new();
@@ -352,19 +414,19 @@ fn validate_compositions(
 
         let inputs = composition
             .inputs
-            .into_iter()
+            .iter()
             .enumerate()
-            .map(|(index, input)| validate_composition_input(&name, index, input, source_root))
+            .map(|(index, input)| validate_composition_input(name, index, input, source_root))
             .collect::<Result<Vec<_>>>()?;
 
-        let renderer = validate_renderer(&name, composition.renderer)?;
+        let renderer = validate_renderer(name, &composition.renderer)?;
 
         compositions.insert(
             name.clone(),
             Composition {
-                name,
+                name: name.clone(),
                 inputs,
-                variables: composition.variables,
+                variables: composition.variables.clone(),
                 renderer,
                 output: normalize(&output),
             },
@@ -377,7 +439,7 @@ fn validate_compositions(
 fn validate_composition_input(
     composition_name: &str,
     index: usize,
-    input: RawCompositionInput,
+    input: &EditableCompositionInput,
     source_root: &Path,
 ) -> Result<CompositionInput> {
     if input.path.trim().is_empty() {
@@ -396,16 +458,19 @@ fn validate_composition_input(
     )?;
 
     Ok(CompositionInput {
-        path: input.path,
+        path: input.path.clone(),
         resolved_path: normalize(&resolved_path),
-        wrapper: normalize_wrapper(input.wrapper),
+        wrapper: normalize_wrapper(input.wrapper.clone()),
     })
 }
 
-fn validate_renderer(composition_name: &str, renderer: RawRenderer) -> Result<PromptRenderer> {
+fn validate_renderer(
+    composition_name: &str,
+    renderer: &EditableRenderer,
+) -> Result<PromptRenderer> {
     match renderer.kind.as_str() {
         "concat" => Ok(PromptRenderer::Concat {
-            outer_wrapper: normalize_wrapper(renderer.outer_wrapper),
+            outer_wrapper: normalize_wrapper(renderer.outer_wrapper.clone()),
         }),
         "script" => bail!(
             "composition '{}' uses unsupported renderer 'script'; scripted renderers are not yet supported",
@@ -419,8 +484,8 @@ fn validate_renderer(composition_name: &str, renderer: RawRenderer) -> Result<Pr
     }
 }
 
-fn normalize_wrapper(raw: Option<RawTemplateWrapper>) -> TemplateWrapper {
-    let raw = raw.unwrap_or(RawTemplateWrapper {
+fn normalize_wrapper(raw: Option<EditableTemplateWrapper>) -> TemplateWrapper {
+    let raw = raw.unwrap_or(EditableTemplateWrapper {
         before: String::new(),
         after: String::new(),
     });
@@ -518,6 +583,56 @@ fn resolve_target_path(
     Ok(normalize(resolved_destination))
 }
 
+fn resolve_config_path(config_path: &Path) -> Result<PathBuf> {
+    let path = if config_path.is_absolute() {
+        config_path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(config_path)
+    };
+
+    Ok(normalize(&path))
+}
+
+fn atomic_write_text(path: &Path, contents: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("config path '{}' has no parent", path.display()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow!("config path '{}' has no file name", path.display()))?
+        .to_string_lossy()
+        .into_owned();
+    let tmp_path = parent.join(format!("{file_name}.tmp"));
+
+    {
+        let mut file = fs::File::create(&tmp_path)
+            .with_context(|| format!("failed to create {}", tmp_path.display()))?;
+        file.write_all(contents.as_bytes())
+            .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+        file.flush()
+            .with_context(|| format!("failed to flush {}", tmp_path.display()))?;
+    }
+
+    fs::rename(&tmp_path, path).with_context(|| {
+        format!(
+            "failed to atomically replace {} with {}",
+            path.display(),
+            tmp_path.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 fn default_true() -> bool {
     true
 }
@@ -543,5 +658,115 @@ impl PromptRenderer {
         match self {
             PromptRenderer::Concat { outer_wrapper } => outer_wrapper,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn editable_config_round_trips_to_normalized_yaml() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.yaml");
+        fs::create_dir_all(temp.path().join("source/Skills/alpha")).unwrap();
+        fs::write(temp.path().join("source/Skills/alpha/SKILL.md"), "# alpha").unwrap();
+
+        let document = EditableConfigDocument {
+            path: config_path.clone(),
+            config_dir: temp.path().to_path_buf(),
+            config: EditableConfig {
+                version: 1,
+                source_root: temp.path().join("source").display().to_string(),
+                compositions: BTreeMap::new(),
+                profiles: BTreeMap::from([(
+                    "main".to_string(),
+                    EditableProfile {
+                        source_root: None,
+                        requires: Vec::new(),
+                        rules: vec![EditableRule {
+                            select: "Skills/*".to_string(),
+                            to: vec!["/tmp/example/skills/".to_string()],
+                            mode: "symlink".to_string(),
+                            enabled: true,
+                            tags: Vec::new(),
+                            note: None,
+                        }],
+                    },
+                )]),
+            },
+        };
+
+        write_editable_config(&document).unwrap();
+        let contents = fs::read_to_string(&config_path).unwrap();
+
+        assert!(contents.contains("version: 1"));
+        assert!(contents.contains("source_root:"));
+        assert!(contents.contains("profiles:"));
+        assert!(contents.contains("main:"));
+        assert!(contents.contains("mode: symlink"));
+        assert!(!contents.contains("enabled: true"));
+    }
+
+    #[test]
+    fn validate_editable_config_reuses_existing_validation_rules() {
+        let temp = TempDir::new().unwrap();
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(source_root.join("Skills/alpha")).unwrap();
+
+        let editable = EditableConfig {
+            version: 1,
+            source_root: source_root.display().to_string(),
+            compositions: BTreeMap::new(),
+            profiles: BTreeMap::from([(
+                "main".to_string(),
+                EditableProfile {
+                    source_root: None,
+                    requires: Vec::new(),
+                    rules: vec![EditableRule {
+                        select: "Skills/*".to_string(),
+                        to: vec!["/tmp/example".to_string()],
+                        mode: "broken".to_string(),
+                        enabled: true,
+                        tags: Vec::new(),
+                        note: None,
+                    }],
+                },
+            )]),
+        };
+
+        let error =
+            validate_editable_config_at(&editable, &temp.path().join("config.yaml")).unwrap_err();
+        assert!(error.to_string().contains("uses invalid mode"));
+    }
+
+    #[test]
+    fn validate_and_write_does_not_replace_file_on_validation_failure() {
+        let temp = TempDir::new().unwrap();
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(source_root.join("Skills/alpha")).unwrap();
+        fs::write(source_root.join("Skills/alpha/SKILL.md"), "# alpha").unwrap();
+
+        let config_path = temp.path().join("config.yaml");
+        fs::write(
+            &config_path,
+            format!(
+                "version: 1\nsource_root: {}\nprofiles:\n  main:\n    rules:\n      - select: Skills/*\n        to:\n          - /tmp/example/\n        mode: symlink\n",
+                source_root.display()
+            ),
+        )
+        .unwrap();
+
+        let mut document = load_editable_config(&config_path).unwrap();
+        let original = fs::read_to_string(&config_path).unwrap();
+        document.config.profiles.get_mut("main").unwrap().rules[0].mode = "broken".to_string();
+
+        let error = validate_and_write_editable_config(&document).unwrap_err();
+        assert!(error.to_string().contains("uses invalid mode"));
+        assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
     }
 }

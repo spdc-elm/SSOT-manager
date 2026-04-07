@@ -76,11 +76,15 @@ If you compile generated assets into your repo, keep the generated path gitignor
 
 - `tui` opens a profile-centered terminal UI backed by the same library inspection and reconcile logic as the CLI.
 - Navigation: `Up`/`Down` or `j`/`k` changes the selected profile, `Tab`/`Left`/`Right` switches between `Show`, `Plan`, and `Doctor`.
-- Actions: `c` compiles the selected profile's required prompt compositions, `a` applies the selected profile, `u` runs `undo`, `r` refreshes state, and `q` quits.
+- Inspection actions: `c` compiles the selected profile's required prompt compositions, `a` applies the selected profile, `u` runs `undo`, `r` refreshes state, and `q` quits.
+- Profile editing: `e` edits the selected profile, `n` creates a new profile, and `d` starts a delete confirmation for the selected profile.
+- Inside the profile editor: `j`/`k` moves between fields, `Enter` edits the selected field or opens a focused collection editor, `s` saves, and `Esc` backs out or opens an unsaved-changes confirmation.
+- Collection editors support add/edit/remove and in-place reordering with `J`/`K` for ordered items such as `requires`, rules, rule destinations, and rule tags.
 - If the current profile plan contains only forceable dangers, the first `a` arms backup-overwrite confirmation and the second `a` executes the forced apply.
+- Saving from the TUI rewrites the YAML config in normalized form. Comments and original formatting are not preserved after a TUI save.
 
 ## Explicit Non-Goals
 
 - No profile composition or include semantics yet
 - No arbitrary script hooks or general workflow automation
-- No separate composition-browser TUI or interactive config editing
+- No separate composition-browser TUI

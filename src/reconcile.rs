@@ -111,7 +111,9 @@ fn apply_plan_internal(
         .any(|item| item.action == Action::Danger && (!force_with_backup || !item.forceable))
     {
         if force_with_backup {
-            bail!("refusing force-with-backup apply because the plan contains non-forceable danger actions");
+            bail!(
+                "refusing force-with-backup apply because the plan contains non-forceable danger actions"
+            );
         }
         bail!("refusing to apply because the plan contains danger actions");
     }

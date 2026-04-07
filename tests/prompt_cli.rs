@@ -66,10 +66,12 @@ fn prompt_preview_and_build_render_wrapped_output() {
     assert!(preview.contains("<prompt host=\"codex\" kind=\"system\">"));
     assert!(preview.contains("<assistant path=\"Agents/assistant.md\">"));
     assert!(preview.contains("<user path=\"USER.md\">"));
-    assert!(!fixture
-        .root()
-        .join("source/build/prompts/AGENTS.generated.md")
-        .exists());
+    assert!(
+        !fixture
+            .root()
+            .join("source/build/prompts/AGENTS.generated.md")
+            .exists()
+    );
 
     bin()
         .arg("--config")
@@ -81,8 +83,12 @@ fn prompt_preview_and_build_render_wrapped_output() {
         .success()
         .stdout(predicates::str::contains("Built composition 'agent'"));
 
-    let built = fs::read_to_string(fixture.root().join("source/build/prompts/AGENTS.generated.md"))
-        .unwrap();
+    let built = fs::read_to_string(
+        fixture
+            .root()
+            .join("source/build/prompts/AGENTS.generated.md"),
+    )
+    .unwrap();
     assert!(built.contains("<prompt host=\"codex\" kind=\"system\">"));
 }
 

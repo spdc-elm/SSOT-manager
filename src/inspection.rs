@@ -147,9 +147,15 @@ pub fn explain_profile(
         .source_root
         .clone();
     let required_compositions = profile_requirements(config, profile_name)?;
-    let has_blocking_prerequisite = required_compositions.iter().any(|composition| composition.status != "ready");
+    let has_blocking_prerequisite = required_compositions
+        .iter()
+        .any(|composition| composition.status != "ready");
     let (diagnostics, intents, plan) = if has_blocking_prerequisite {
-        (Vec::new(), Vec::new(), build_plan(config, profile_name, state)?)
+        (
+            Vec::new(),
+            Vec::new(),
+            build_plan(config, profile_name, state)?,
+        )
     } else {
         let resolved = resolve_profile(config, profile_name)?;
         let diagnostics = resolved
