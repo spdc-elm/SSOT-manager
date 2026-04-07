@@ -4,8 +4,9 @@ set -eu
 
 REPO="${SSOT_MANAGER_REPO:-spdc-elm/SSOT-manager}"
 VERSION="${SSOT_MANAGER_VERSION:-latest}"
-INSTALL_DIR="${SSOT_MANAGER_INSTALL_DIR:-${HOME}/.local/bin}"
+INSTALL_DIR="${SSOT_MANAGER_INSTALL_DIR:-}"
 BINARY_NAME="ssot-manager"
+INSTALL_DIR_EXPLICIT=0
 
 usage() {
   cat <<EOF
@@ -24,6 +25,46 @@ Environment overrides:
   SSOT_MANAGER_INSTALL_DIR
   SSOT_MANAGER_REPO
 EOF
+}
+
+path_contains_dir() {
+  dir="$1"
+  case ":${PATH:-}:" in
+    *:"$dir":*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+dir_is_writable_or_creatable() {
+  dir="$1"
+
+  if [ -d "$dir" ]; then
+    [ -w "$dir" ]
+    return
+  fi
+
+  parent_dir=$(dirname "$dir")
+  [ -d "$parent_dir" ] && [ -w "$parent_dir" ]
+}
+
+pick_install_dir() {
+  if command -v "$BINARY_NAME" >/dev/null 2>&1; then
+    dirname "$(command -v "$BINARY_NAME")"
+    return
+  fi
+
+  for candidate in "/usr/local/bin" "/opt/homebrew/bin" "${HOME}/.local/bin" "${HOME}/bin"; do
+    if path_contains_dir "$candidate" && dir_is_writable_or_creatable "$candidate"; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  printf '%s\n' "${HOME}/.local/bin"
 }
 
 need_cmd() {
@@ -117,6 +158,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     --install-dir)
       INSTALL_DIR="$2"
+      INSTALL_DIR_EXPLICIT=1
       shift 2
       ;;
     --repo)
@@ -135,6 +177,10 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ "${SSOT_MANAGER_INSTALL_DIR+x}" = "x" ]; then
+  INSTALL_DIR_EXPLICIT=1
+fi
+
 need_cmd uname
 need_cmd sed
 need_cmd tar
@@ -147,6 +193,10 @@ trap 'rm -rf "$tmpdir"' EXIT INT TERM HUP
 
 if [ "$VERSION" = "latest" ]; then
   VERSION=$(resolve_latest_tag "$tmpdir/latest-release.json")
+fi
+
+if [ "$INSTALL_DIR_EXPLICIT" -ne 1 ]; then
+  INSTALL_DIR=$(pick_install_dir)
 fi
 
 TARGET=$(detect_target)

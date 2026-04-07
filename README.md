@@ -51,7 +51,7 @@ The installer currently supports the published Unix release targets:
 - macOS x86_64
 - macOS aarch64
 
-By default it installs to `~/.local/bin`.
+By default it tries to reuse an existing `ssot-manager` location first. Otherwise it prefers a writable common bin directory that is already on `PATH`, such as `/usr/local/bin`, `/opt/homebrew/bin`, `~/.local/bin`, or `~/bin`. If none match, it falls back to `~/.local/bin`.
 
 ## Update
 
