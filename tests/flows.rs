@@ -358,7 +358,9 @@ fn hardlink_mode_updates_when_source_directory_gains_a_file() {
     apply_hardlink_safe(&harness, &state_dir);
 
     let source_file = harness.source_root().join("Skills/alpha/new-src.txt");
-    let target_file = harness.dest_root().join("hardlinked-skills/alpha/new-src.txt");
+    let target_file = harness
+        .dest_root()
+        .join("hardlinked-skills/alpha/new-src.txt");
     fs::write(&source_file, "src-new").unwrap();
 
     bin()
@@ -399,7 +401,9 @@ fn hardlink_mode_updates_when_source_directory_loses_a_file() {
     apply_hardlink_safe(&harness, &state_dir);
 
     let source_file = harness.source_root().join("Skills/alpha/notes.txt");
-    let target_file = harness.dest_root().join("hardlinked-skills/alpha/notes.txt");
+    let target_file = harness
+        .dest_root()
+        .join("hardlinked-skills/alpha/notes.txt");
     fs::write(&source_file, "notes").unwrap();
 
     apply_hardlink_safe(&harness, &state_dir);
@@ -480,7 +484,9 @@ fn hardlink_mode_updates_when_target_directory_loses_a_file() {
     apply_hardlink_safe(&harness, &state_dir);
 
     let source_file = harness.source_root().join("Skills/alpha/notes.txt");
-    let target_file = harness.dest_root().join("hardlinked-skills/alpha/notes.txt");
+    let target_file = harness
+        .dest_root()
+        .join("hardlinked-skills/alpha/notes.txt");
     fs::write(&source_file, "notes").unwrap();
 
     apply_hardlink_safe(&harness, &state_dir);
