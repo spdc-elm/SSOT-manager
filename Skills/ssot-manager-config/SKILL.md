@@ -22,9 +22,10 @@ Draft runtime config for `ssot-manager` without inventing semantics.
 - Interpret `select` relative to the profile's effective `source_root`, not as an absolute filesystem path.
 - Interpret relative `to` destinations relative to the config file directory.
 - Use profile-level `source_root` only when one bundle genuinely resolves assets from a different root.
+- When syncing a directory asset without keeping its folder name, point `source_root` at that directory and sync its children, for example `source_root: .../docs` with `select: "*"` to `.../sys1/`. If `to` ends with `/`, already exists as a directory, or one rule matches multiple assets, the runtime appends the source basename, so `select: docs` to `.../sys1/` materializes `.../sys1/docs`.
 - Do not equate assets-first with "one profile per installation surface". That is only one possible authoring pattern.
 - When the same source asset should sync to multiple consumers as one bundle, prefer one rule with multiple `to` destinations inside one profile.
-- The clap command name shown in help may be `ssot`, but the installed binary and package name are currently `ssot-manager`. Do not assume `ssot` exists on PATH.
+- The installed binary and CLI help examples use `ssot-manager`. Do not assume an `ssot` binary exists on PATH.
 - Keep rule order deterministic. For generated per-asset rules, sort by asset basename.
 - Use `enabled: false` only when a rule is intentionally disabled. Omit it for enabled rules.
 - Avoid overlapping profiles that manage the same target paths unless the user explicitly wants separate, conflicting bundles. The runtime treats that as cross-profile ownership, not inheritance.

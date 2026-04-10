@@ -59,6 +59,7 @@ profiles:
 - `select` is matched relative to the profile's effective `source_root`.
 - Relative `to` destinations resolve relative to the config file directory.
 - `~/` expands from `HOME`.
+- If `to` ends with `/`, already exists as a directory, or one rule matches multiple assets, the runtime appends each source basename to the destination. Example: `select: docs` to `.../sys1/` becomes `.../sys1/docs`. To sync the contents directly into `.../sys1/`, set `source_root` to `.../docs` and sync `select: "*"`.
 
 ## Supported Fields
 
