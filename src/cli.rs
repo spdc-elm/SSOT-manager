@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, error::ErrorKind};
 
 use crate::config::{load_config, load_editable_config};
 use crate::inspection::{
@@ -20,11 +21,24 @@ use crate::reconcile::{
 use crate::state::StateStore;
 
 #[derive(Debug, Parser)]
-#[command(name = "ssot", about = "Deterministic SSOT asset manager")]
+#[command(
+    name = "ssot-manager",
+    about = "Deterministic SSOT asset manager",
+    after_help = "Examples:\n  ssot-manager config validate\n  ssot-manager profile list\n  ssot-manager profile explain <NAME>\n  ssot-manager profile apply <NAME>\n\nCommon workflow:\n  1. Use `profile explain` to inspect resolved source -> target intents.\n  2. Use `profile plan` to review concrete create/update/remove actions.\n  3. Use `profile apply` to execute the plan and write journal entries."
+)]
 struct Cli {
-    #[arg(long, global = true, default_value = "ssot.yaml")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "ssot.yaml",
+        help = "Config file path"
+    )]
     config: PathBuf,
-    #[arg(long, global = true)]
+    #[arg(
+        long,
+        global = true,
+        help = "Override the state directory for journals and records"
+    )]
     state_dir: Option<PathBuf>,
     #[command(subcommand)]
     command: Commands,
@@ -32,66 +46,119 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    #[command(
+        about = "Validate config files and referenced assets",
+        after_help = "Example:\n  ssot-manager config validate"
+    )]
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    #[command(
+        about = "Inspect, plan, apply, and diagnose profile syncs",
+        after_help = "Workflow:\n  ssot-manager profile show <NAME>\n  ssot-manager profile explain <NAME>\n  ssot-manager profile plan <NAME>\n  ssot-manager profile apply <NAME>\n\nCommand roles:\n  show: inspect the declared profile definition.\n  explain: resolve prerequisites, source -> target intents, and plan summary without mutating the filesystem.\n  plan: show concrete create/update/remove/danger actions for the current state.\n  apply: execute the current plan and record journal entries.\n  doctor: detect drift, broken links, and ownership issues for managed targets.\n\nTarget path rules:\n  If `to` ends with `/`, already exists as a directory, or a rule matches multiple assets,\n  the source basename is appended to the destination.\n\n  Example: source_root=/repo, select=docs, to=/dest/sys1/ -> /dest/sys1/docs\n  Example: source_root=/repo/docs, select=*, to=/dest/sys1/ -> entries land directly under /dest/sys1/"
+    )]
     Profile {
         #[command(subcommand)]
         command: ProfileCommand,
     },
+    #[command(
+        about = "Inspect and build prompt compositions",
+        after_help = "Examples:\n  ssot-manager prompt list\n  ssot-manager prompt preview <NAME>\n  ssot-manager prompt build <NAME>"
+    )]
     Prompt {
         #[command(subcommand)]
         command: PromptCommand,
     },
+    #[command(about = "Open the interactive profile browser and editor")]
     Tui,
+    #[command(about = "Undo the last successful profile apply journal")]
     Undo,
 }
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
+    #[command(about = "Validate config structure, paths, and cross-references")]
     Validate,
 }
 
 #[derive(Debug, Subcommand)]
 enum ProfileCommand {
+    #[command(about = "List configured profiles and their effective source roots")]
     List {
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Emit machine-readable JSON instead of human-readable text"
+        )]
         json: bool,
     },
+    #[command(about = "Show the effective definition of a profile")]
     Show {
+        #[arg(value_name = "NAME", help = "Profile name")]
         name: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Emit machine-readable JSON instead of human-readable text"
+        )]
         json: bool,
     },
+    #[command(
+        about = "Resolve source -> target intents and summarize the current plan without mutating the filesystem"
+    )]
     Explain {
+        #[arg(value_name = "NAME", help = "Profile name")]
         name: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Emit machine-readable JSON instead of human-readable text"
+        )]
         json: bool,
     },
+    #[command(about = "Show concrete create/update/remove actions for a profile")]
     Plan {
+        #[arg(value_name = "NAME", help = "Profile name")]
         name: String,
     },
+    #[command(about = "Execute the current plan for a profile and record journal entries")]
     Apply {
+        #[arg(value_name = "NAME", help = "Profile name")]
         name: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Allow forceable danger actions by backing up the replaced unmanaged content first"
+        )]
         force_with_backup: bool,
     },
+    #[command(about = "Detect drift, broken links, and ownership issues for managed targets")]
     Doctor {
+        #[arg(value_name = "NAME", help = "Profile name")]
         name: String,
     },
 }
 
 #[derive(Debug, Subcommand)]
 enum PromptCommand {
+    #[command(about = "List configured prompt compositions")]
     List,
-    Show { name: String },
-    Preview { name: String },
-    Build { name: String },
+    #[command(about = "Show the effective recipe for a composition")]
+    Show {
+        #[arg(value_name = "NAME", help = "Composition name")]
+        name: String,
+    },
+    #[command(about = "Render a composition without writing the output file")]
+    Preview {
+        #[arg(value_name = "NAME", help = "Composition name")]
+        name: String,
+    },
+    #[command(about = "Write a composition output under source_root")]
+    Build {
+        #[arg(value_name = "NAME", help = "Composition name")]
+        name: String,
+    },
 }
 
 pub fn run() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = parse_cli_or_exit();
     let store = StateStore::new(cli.state_dir)?;
 
     match cli.command {
@@ -231,6 +298,67 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_cli_or_exit() -> Cli {
+    let args: Vec<OsString> = std::env::args_os().collect();
+
+    match Cli::try_parse_from(&args) {
+        Ok(cli) => cli,
+        Err(error) => exit_with_cli_error(error, &args),
+    }
+}
+
+fn exit_with_cli_error(error: clap::Error, args: &[OsString]) -> ! {
+    if error.kind() == ErrorKind::InvalidSubcommand {
+        if let Some(tip) = misplaced_profile_subcommand_tip(args) {
+            let rendered = error.to_string();
+            eprint!("{rendered}");
+            if !rendered.ends_with('\n') {
+                eprintln!();
+            }
+            eprintln!("tip: {tip}");
+            std::process::exit(error.exit_code());
+        }
+    }
+
+    error.exit()
+}
+
+fn misplaced_profile_subcommand_tip(args: &[OsString]) -> Option<&'static str> {
+    match first_non_option_arg(args)? {
+        "list" => Some("did you mean 'ssot-manager profile list'?"),
+        "show" => Some("did you mean 'ssot-manager profile show <NAME>'?"),
+        "explain" => Some("did you mean 'ssot-manager profile explain <NAME>'?"),
+        "plan" => Some("did you mean 'ssot-manager profile plan <NAME>'?"),
+        "apply" => Some("did you mean 'ssot-manager profile apply <NAME>'?"),
+        "doctor" => Some("did you mean 'ssot-manager profile doctor <NAME>'?"),
+        _ => None,
+    }
+}
+
+fn first_non_option_arg(args: &[OsString]) -> Option<&str> {
+    let mut skip_next_value = false;
+
+    for arg in args.iter().skip(1) {
+        let arg = arg.to_str()?;
+        if skip_next_value {
+            skip_next_value = false;
+            continue;
+        }
+
+        match arg {
+            "--config" | "--state-dir" => {
+                skip_next_value = true;
+            }
+            "--" => return None,
+            _ if arg.starts_with("--config=") || arg.starts_with("--state-dir=") => {}
+            _ if arg.starts_with('-') => {}
+            _ => return Some(arg),
+        }
+    }
+
+    None
 }
 
 fn print_plan(plan: &crate::reconcile::Plan) {

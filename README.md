@@ -53,7 +53,7 @@ The installer currently supports the published Unix release targets:
 
 By default it tries to reuse an existing `ssot-manager` location first. Otherwise it prefers a writable common bin directory that is already on `PATH`, such as `/usr/local/bin`, `/opt/homebrew/bin`, `~/.local/bin`, or `~/bin`. If none match, it falls back to `~/.local/bin`.
 
-The installed executable is currently `ssot-manager`. The CLI help text may still show `ssot` as the command name because that is the clap display name, but operators should not assume an `ssot` binary exists on `PATH`.
+The installed executable and CLI help examples use `ssot-manager`. Do not assume an `ssot` binary exists on `PATH`.
 
 ## Update
 
