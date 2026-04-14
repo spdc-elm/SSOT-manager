@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use globset::{GlobBuilder, GlobMatcher};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -25,6 +26,8 @@ pub struct ManagedRecord {
     pub source: String,
     pub target: String,
     pub mode: MaterializationMode,
+    #[serde(default)]
+    pub ignore: Vec<String>,
     pub updated_at: u64,
 }
 
@@ -245,6 +248,7 @@ pub fn build_record(intent: &SyncIntent, timestamp: u64) -> ManagedRecord {
         source: path_to_string(&intent.source),
         target: path_to_string(&intent.target),
         mode: intent.mode,
+        ignore: intent.ignore.clone(),
         updated_at: timestamp,
     }
 }
@@ -294,14 +298,19 @@ pub fn create_symlink(target: &Path, link_target: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn materialize_target(source: &Path, target: &Path, mode: MaterializationMode) -> Result<()> {
+pub fn materialize_target(
+    source: &Path,
+    target: &Path,
+    mode: MaterializationMode,
+    ignore: &[String],
+) -> Result<()> {
     match mode {
         MaterializationMode::Symlink => {
             let link_target = symlink_target_for(source, target);
             create_symlink(target, &link_target)
         }
-        MaterializationMode::Copy => materialize_copy(source, target),
-        MaterializationMode::Hardlink => materialize_hardlink(source, target),
+        MaterializationMode::Copy => materialize_copy(source, target, ignore),
+        MaterializationMode::Hardlink => materialize_hardlink(source, target, ignore),
     }
 }
 
@@ -427,26 +436,40 @@ pub fn target_matches_source(
     target: &Path,
     current_target: &PathState,
     mode: MaterializationMode,
+    ignore: &[String],
 ) -> Result<bool> {
     match mode {
-        MaterializationMode::Symlink => {
-            Ok(symlink_matches_expected(target, current_target, source))
-        }
+        MaterializationMode::Symlink => Ok(symlink_matches_expected(target, current_target, source)),
         MaterializationMode::Copy => {
             let source_state = snapshot_path(source)?;
-            Ok(path_state_content_matches(&source_state, current_target))
+            path_states_match(&source_state, current_target, MaterializationMode::Copy, ignore)
         }
         MaterializationMode::Hardlink => {
             let source_state = snapshot_path(source)?;
-            Ok(path_state_hardlink_matches(&source_state, current_target))
+            path_states_match(
+                &source_state,
+                current_target,
+                MaterializationMode::Hardlink,
+                ignore,
+            )
         }
     }
+}
+
+pub fn recorded_post_state_matches(
+    expected: &PathState,
+    current: &PathState,
+    mode: MaterializationMode,
+    ignore: &[String],
+) -> Result<bool> {
+    path_states_match(expected, current, mode, ignore)
 }
 
 pub fn restore_from_source(
     target: &Path,
     source: &Path,
     mode: MaterializationMode,
+    ignore: &[String],
     recorded_source_state: &PathState,
 ) -> Result<()> {
     let current_source_state = snapshot_path(source)?;
@@ -458,7 +481,7 @@ pub fn restore_from_source(
     }
 
     remove_existing_path(target)?;
-    materialize_target(source, target, mode)
+    materialize_target(source, target, mode, ignore)
 }
 
 pub fn create_backup_artifact(
@@ -482,7 +505,7 @@ pub fn create_backup_artifact(
                     .with_context(|| format!("failed to create {}", parent.display()))?;
             }
             remove_existing_path(&backup_path)?;
-            materialize_copy(target, &backup_path)?;
+            materialize_copy(target, &backup_path, &[])?;
 
             Ok(Some(BackupArtifact {
                 path: path_to_string(&backup_path),
@@ -508,18 +531,38 @@ pub fn restore_from_backup(target: &Path, backup: &BackupArtifact) -> Result<()>
     }
 
     remove_existing_path(target)?;
-    materialize_copy(backup_path, target)
+    materialize_copy(backup_path, target, &[])
 }
 
-fn materialize_copy(source: &Path, target: &Path) -> Result<()> {
-    materialize_tree(source, target, MaterializationMode::Copy)
+fn materialize_copy(source: &Path, target: &Path, ignore: &[String]) -> Result<()> {
+    let matchers = compile_ignore_matchers(ignore)?;
+    materialize_tree(
+        source,
+        target,
+        MaterializationMode::Copy,
+        &matchers,
+        Path::new(""),
+    )
 }
 
-fn materialize_hardlink(source: &Path, target: &Path) -> Result<()> {
-    materialize_tree(source, target, MaterializationMode::Hardlink)
+fn materialize_hardlink(source: &Path, target: &Path, ignore: &[String]) -> Result<()> {
+    let matchers = compile_ignore_matchers(ignore)?;
+    materialize_tree(
+        source,
+        target,
+        MaterializationMode::Hardlink,
+        &matchers,
+        Path::new(""),
+    )
 }
 
-fn materialize_tree(source: &Path, target: &Path, mode: MaterializationMode) -> Result<()> {
+fn materialize_tree(
+    source: &Path,
+    target: &Path,
+    mode: MaterializationMode,
+    ignore: &[GlobMatcher],
+    relative_path: &Path,
+) -> Result<()> {
     let metadata = fs::symlink_metadata(source)
         .with_context(|| format!("failed to inspect source {}", source.display()))?;
     let file_type = metadata.file_type();
@@ -540,7 +583,18 @@ fn materialize_tree(source: &Path, target: &Path, mode: MaterializationMode) -> 
             .with_context(|| format!("failed to read directory {}", source.display()))?
         {
             let entry = entry?;
-            materialize_tree(&entry.path(), &target.join(entry.file_name()), mode)?;
+            let child_name = entry.file_name();
+            let child_relative = relative_path.join(Path::new(&child_name));
+            if matches_ignore_path(ignore, &child_relative) {
+                continue;
+            }
+            materialize_tree(
+                &entry.path(),
+                &target.join(&child_name),
+                mode,
+                ignore,
+                &child_relative,
+            )?;
         }
         return Ok(());
     }
@@ -622,6 +676,79 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
         let _ = write!(&mut hex, "{byte:02x}");
     }
     hex
+}
+
+fn path_states_match(
+    left: &PathState,
+    right: &PathState,
+    mode: MaterializationMode,
+    ignore: &[String],
+) -> Result<bool> {
+    let matchers = compile_ignore_matchers(ignore)?;
+    let left = filter_path_state(left, &matchers, Path::new("")).unwrap_or(PathState::Missing);
+    let right = filter_path_state(right, &matchers, Path::new("")).unwrap_or(PathState::Missing);
+
+    Ok(match mode {
+        MaterializationMode::Copy => path_state_content_matches(&left, &right),
+        MaterializationMode::Hardlink => path_state_hardlink_matches(&left, &right),
+        MaterializationMode::Symlink => left == right,
+    })
+}
+
+fn compile_ignore_matchers(patterns: &[String]) -> Result<Vec<GlobMatcher>> {
+    patterns
+        .iter()
+        .map(|pattern| {
+            GlobBuilder::new(pattern)
+                .literal_separator(true)
+                .build()
+                .with_context(|| format!("invalid ignore glob '{pattern}' escaped validation"))
+                .map(|glob| glob.compile_matcher())
+        })
+        .collect()
+}
+
+fn filter_path_state(
+    state: &PathState,
+    ignore: &[GlobMatcher],
+    relative_path: &Path,
+) -> Option<PathState> {
+    if !relative_path.as_os_str().is_empty() && matches_ignore_path(ignore, relative_path) {
+        return None;
+    }
+
+    match state {
+        PathState::Directory { entries } => {
+            let mut filtered = BTreeMap::new();
+            for (name, entry) in entries {
+                let child_relative = relative_path.join(name);
+                if let Some(entry) = filter_path_state(entry, ignore, &child_relative) {
+                    filtered.insert(name.clone(), entry);
+                }
+            }
+            Some(PathState::Directory { entries: filtered })
+        }
+        _ => Some(state.clone()),
+    }
+}
+
+fn matches_ignore_path(ignore: &[GlobMatcher], relative_path: &Path) -> bool {
+    if ignore.is_empty() || relative_path.as_os_str().is_empty() {
+        return false;
+    }
+
+    let relative = relative_path_string(relative_path);
+    ignore.iter().any(|matcher| matcher.is_match(&relative))
+}
+
+fn relative_path_string(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn backup_path_for(store: &StateStore, applied_at: u64, index: usize, target: &Path) -> PathBuf {

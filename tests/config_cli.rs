@@ -115,6 +115,23 @@ fn rejects_unknown_required_composition() {
 }
 
 #[test]
+fn rejects_invalid_ignore_glob() {
+    let fixture = prepare_fixture("invalid-ignore.yaml", |temp| {
+        fs::create_dir_all(temp.path().join("source/Skills/alpha")).unwrap();
+        fs::create_dir_all(temp.path().join("dest")).unwrap();
+    });
+
+    bin()
+        .arg("--config")
+        .arg(fixture.config_path())
+        .arg("config")
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("invalid ignore glob"));
+}
+
+#[test]
 fn ignores_disabled_rules_when_planning() {
     let fixture = prepare_fixture("disabled-rule.yaml", |temp| {
         fs::create_dir_all(temp.path().join("source/Skills/alpha")).unwrap();

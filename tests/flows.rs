@@ -295,6 +295,77 @@ fn copy_mode_updates_plan_reports_drift_and_blocks_undo_after_target_edit() {
 }
 
 #[test]
+fn copy_mode_ignore_globs_skip_metadata_and_allow_undo() {
+    let harness = Harness::new();
+    let state_dir = harness.path().join("state");
+    let source_ignored = harness.source_root().join("Skills/alpha/.DS_Store");
+    fs::write(&source_ignored, "source-metadata").unwrap();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("apply")
+        .arg("copy-safe")
+        .assert()
+        .success();
+
+    let target_root = harness.dest_root().join("copied-skills/alpha");
+    assert!(target_root.join("SKILL.md").exists());
+    assert!(!target_root.join(".DS_Store").exists());
+
+    let journal: Value =
+        serde_json::from_str(&fs::read_to_string(state_dir.join("last-apply.json")).unwrap())
+            .unwrap();
+    assert_eq!(journal["entries"][0]["record_after"]["ignore"][0], "**/.DS_Store");
+    assert_eq!(journal["entries"][0]["record_after"]["ignore"][1], "**/Thumbs.db");
+
+    fs::write(target_root.join(".DS_Store"), "target-metadata").unwrap();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("plan")
+        .arg("copy-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("skip"))
+        .stdout(predicates::str::contains("Summary: create=0 update=0 remove=0 skip=1"))
+        .stdout(predicates::str::contains(
+            "target already matches the desired materialization",
+        ));
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("doctor")
+        .arg("copy-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Doctor OK"));
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("undo")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("targets reverted"));
+
+    assert!(!target_root.exists());
+}
+
+#[test]
 fn hardlink_mode_creates_linked_tree_and_doctor_detects_relation_drift() {
     use std::os::unix::fs::MetadataExt;
 
@@ -347,6 +418,57 @@ fn hardlink_mode_creates_linked_tree_and_doctor_detects_relation_drift() {
         .stdout(predicates::str::contains("targets reverted"));
 
     assert!(!target_file.exists());
+}
+
+#[test]
+fn hardlink_mode_ignore_globs_skip_metadata_in_plan_and_doctor() {
+    use std::os::unix::fs::MetadataExt;
+
+    let harness = Harness::new();
+    let state_dir = harness.path().join("state");
+    let source_ignored = harness.source_root().join("Skills/alpha/.DS_Store");
+    fs::write(&source_ignored, "source-metadata").unwrap();
+
+    apply_hardlink_safe(&harness, &state_dir);
+
+    let source_file = harness.source_root().join("Skills/alpha/SKILL.md");
+    let target_root = harness.dest_root().join("hardlinked-skills/alpha");
+    let target_file = target_root.join("SKILL.md");
+    let source_meta = fs::metadata(&source_file).unwrap();
+    let target_meta = fs::metadata(&target_file).unwrap();
+    assert_eq!(source_meta.ino(), target_meta.ino());
+    assert_eq!(source_meta.dev(), target_meta.dev());
+    assert!(!target_root.join(".DS_Store").exists());
+
+    fs::write(target_root.join(".DS_Store"), "target-metadata").unwrap();
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("plan")
+        .arg("hardlink-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("skip"))
+        .stdout(predicates::str::contains("Summary: create=0 update=0 remove=0 skip=1"))
+        .stdout(predicates::str::contains(
+            "target already matches the desired materialization",
+        ));
+
+    bin()
+        .arg("--config")
+        .arg(harness.config_path())
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("profile")
+        .arg("doctor")
+        .arg("hardlink-safe")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Doctor OK"));
 }
 
 #[test]

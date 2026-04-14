@@ -44,7 +44,10 @@ profiles:
         to:
           - ~/.codex/skills/
           - ~/.config/opencode/skills/
-        mode: symlink
+        mode: copy
+        ignore:
+          - "**/.DS_Store"
+          - "**/Thumbs.db"
         enabled: false
         tags:
           - skill
@@ -81,6 +84,7 @@ profiles:
 - `select`: required glob or relative asset path
 - `to`: required ordered list of destinations
 - `mode`: required, one of `symlink`, `copy`, `hardlink`
+- `ignore`: optional ordered list of glob patterns matched relative to the selected asset root
 - `enabled`: optional, defaults to `true`
 - `tags`: optional list of strings
 - `note`: optional string
@@ -89,6 +93,8 @@ profiles:
 
 - Rule toggles are per rule, not per wildcard expansion result.
 - If per-skill toggles matter, generate one rule per skill directory.
+- `ignore` is explicit operator policy, not a hidden runtime default. Use it mainly on `copy` and `hardlink` directory rules when hosts emit metadata files inside otherwise healthy managed trees.
+- `ignore` changes directory comparison and materialization semantics. Ignored descendants are omitted from desired tree evaluation, post-apply verification, doctor drift checks, and undo post-state safety checks.
 - Profiles that target the same paths do not layer. The runtime will report targets managed by another profile.
 - `requires` refers to prompt compositions only, not other profiles.
 

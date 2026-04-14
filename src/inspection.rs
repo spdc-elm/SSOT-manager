@@ -41,6 +41,7 @@ pub struct RuleView {
     pub select: String,
     pub destinations: Vec<String>,
     pub mode: String,
+    pub ignore: Vec<String>,
     pub enabled: bool,
     pub tags: Vec<String>,
     pub note: Option<String>,
@@ -68,6 +69,7 @@ pub struct IntentView {
     pub source: String,
     pub target: String,
     pub mode: String,
+    pub ignore: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +119,7 @@ pub fn show_profile(config: &Config, profile_name: &str) -> Result<ProfileShowVi
             select: rule.select.clone(),
             destinations: rule.to.clone(),
             mode: materialization_mode_as_str(rule.mode).to_string(),
+            ignore: rule.ignore.clone(),
             enabled: rule.enabled,
             tags: rule.tags.clone(),
             note: rule.note.clone(),
@@ -173,6 +176,7 @@ pub fn explain_profile(
                 source: path_to_string(&intent.source),
                 target: path_to_string(&intent.target),
                 mode: materialization_mode_as_str(intent.mode).to_string(),
+                ignore: intent.ignore.clone(),
             })
             .collect();
         let plan = build_plan_from_resolved(resolved, state)?;

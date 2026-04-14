@@ -96,6 +96,8 @@ fn profile_show_json_reports_override_source_root() {
     );
     assert_eq!(value["rules"].as_array().unwrap().len(), 1);
     assert_eq!(value["rules"][0]["mode"], "hardlink");
+    assert_eq!(value["rules"][0]["ignore"][0], "**/.DS_Store");
+    assert_eq!(value["rules"][0]["ignore"][1], "**/Thumbs.db");
 }
 
 #[test]
@@ -152,6 +154,34 @@ fn profile_explain_json_includes_plan_items() {
     assert_eq!(value["plan_summary"]["create"], 2);
     assert_eq!(value["diagnostics"].as_array().unwrap().len(), 1);
     assert_eq!(value["plan_items"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn profile_explain_json_preserves_rule_ignore_globs() {
+    let fixture = prepare_fixture("inspection.yaml", |temp| {
+        fs::create_dir_all(temp.path().join("source/Skills/alpha")).unwrap();
+        fs::create_dir_all(temp.path().join("source/Skills/beta")).unwrap();
+        fs::create_dir_all(temp.path().join("source/Agents")).unwrap();
+        fs::write(temp.path().join("source/Agents/assistant.md"), "assistant").unwrap();
+        fs::create_dir_all(temp.path().join("profile-source/Skills/profile-only")).unwrap();
+        fs::create_dir_all(temp.path().join("dest")).unwrap();
+    });
+
+    let stdout = command_stdout(
+        bin()
+            .arg("--config")
+            .arg(fixture.config_path())
+            .arg("profile")
+            .arg("explain")
+            .arg("beta")
+            .arg("--json"),
+    );
+    let value: Value = serde_json::from_str(&stdout).unwrap();
+
+    assert_eq!(value["profile_name"], "beta");
+    assert_eq!(value["intents"].as_array().unwrap().len(), 1);
+    assert_eq!(value["intents"][0]["ignore"][0], "**/.DS_Store");
+    assert_eq!(value["intents"][0]["ignore"][1], "**/Thumbs.db");
 }
 
 fn command_stdout(command: &mut Command) -> String {

@@ -46,6 +46,9 @@ profiles:
         to:
           - __DEST_ROOT__/copied-skills/
         mode: copy
+        ignore:
+          - "**/.DS_Store"
+          - "**/Thumbs.db"
 
   hardlink-safe:
     rules:
@@ -53,6 +56,9 @@ profiles:
         to:
           - __DEST_ROOT__/hardlinked-skills/
         mode: hardlink
+        ignore:
+          - "**/.DS_Store"
+          - "**/Thumbs.db"
 
   self-ref-parent-symlink:
     rules:

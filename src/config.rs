@@ -32,6 +32,7 @@ pub struct Rule {
     pub select: String,
     pub to: Vec<String>,
     pub mode: MaterializationMode,
+    pub ignore: Vec<String>,
     pub enabled: bool,
     pub tags: Vec<String>,
     pub note: Option<String>,
@@ -85,6 +86,7 @@ pub struct SyncIntent {
     pub source: PathBuf,
     pub target: PathBuf,
     pub mode: MaterializationMode,
+    pub ignore: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +130,9 @@ pub struct EditableRule {
     pub select: String,
     pub to: Vec<String>,
     pub mode: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ignore: Vec<String>,
     #[serde(default = "default_true")]
     #[serde(skip_serializing_if = "is_true")]
     pub enabled: bool,
@@ -273,6 +278,7 @@ pub fn resolve_profile(config: &Config, profile_name: &str) -> Result<ResolvedPr
                     source: source.clone(),
                     target,
                     mode: rule.mode,
+                    ignore: rule.ignore.clone(),
                 });
             }
         }
@@ -351,6 +357,11 @@ fn validate_editable_config_model(
             let mode = parse_materialization_mode(&rule.mode).with_context(|| {
                 format!("profile '{name}' rule {} uses invalid mode", index + 1)
             })?;
+            for pattern in &rule.ignore {
+                validate_glob_pattern(pattern).with_context(|| {
+                    format!("profile '{name}' rule {} has invalid ignore glob", index + 1)
+                })?;
+            }
 
             for destination in &rule.to {
                 if destination.trim().is_empty() {
@@ -365,6 +376,7 @@ fn validate_editable_config_model(
                 select: rule.select.clone(),
                 to: rule.to.clone(),
                 mode,
+                ignore: rule.ignore.clone(),
                 enabled: rule.enabled,
                 tags: rule.tags.clone(),
                 note: rule.note.clone(),
@@ -503,6 +515,12 @@ fn parse_materialization_mode(raw: &str) -> Result<MaterializationMode> {
         "hardlink" => Ok(MaterializationMode::Hardlink),
         other => bail!("uses unknown mode '{other}'"),
     }
+}
+
+fn validate_glob_pattern(pattern: &str) -> Result<()> {
+    Glob::new(pattern)?;
+    GlobBuilder::new(pattern).literal_separator(true).build()?;
+    Ok(())
 }
 
 fn ensure_path_within_root(path: &Path, root: &Path, label: &str) -> Result<()> {
@@ -692,6 +710,7 @@ mod tests {
                             select: "Skills/*".to_string(),
                             to: vec!["/tmp/example/skills/".to_string()],
                             mode: "symlink".to_string(),
+                            ignore: Vec::new(),
                             enabled: true,
                             tags: Vec::new(),
                             note: None,
@@ -731,6 +750,7 @@ mod tests {
                         select: "Skills/*".to_string(),
                         to: vec!["/tmp/example".to_string()],
                         mode: "broken".to_string(),
+                        ignore: Vec::new(),
                         enabled: true,
                         tags: Vec::new(),
                         note: None,

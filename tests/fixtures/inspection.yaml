@@ -29,3 +29,6 @@ profiles:
         to:
           - __DEST_ROOT__/beta-skills/
         mode: hardlink
+        ignore:
+          - "**/.DS_Store"
+          - "**/Thumbs.db"

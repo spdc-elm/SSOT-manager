@@ -454,6 +454,9 @@ fn print_profile_show(view: &ProfileShowView) {
         for destination in &rule.destinations {
             println!("  to {}", destination);
         }
+        if !rule.ignore.is_empty() {
+            println!("  ignore {}", rule.ignore.join(","));
+        }
         if !rule.tags.is_empty() {
             println!("  tags {}", rule.tags.join(","));
         }
@@ -492,7 +495,17 @@ fn print_profile_explain(view: &ProfileExplainView) {
     } else {
         println!("Resolved intents:");
         for intent in &view.intents {
-            println!("- {} -> {} ({})", intent.target, intent.source, intent.mode);
+            if intent.ignore.is_empty() {
+                println!("- {} -> {} ({})", intent.target, intent.source, intent.mode);
+            } else {
+                println!(
+                    "- {} -> {} ({}, ignore={})",
+                    intent.target,
+                    intent.source,
+                    intent.mode,
+                    intent.ignore.join(",")
+                );
+            }
         }
     }
 

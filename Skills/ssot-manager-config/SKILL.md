@@ -23,6 +23,8 @@ Draft runtime config for `ssot-manager` without inventing semantics.
 - Interpret relative `to` destinations relative to the config file directory.
 - Use profile-level `source_root` only when one bundle genuinely resolves assets from a different root.
 - When syncing a directory asset without keeping its folder name, point `source_root` at that directory and sync its children, for example `source_root: .../docs` with `select: "*"` to `.../sys1/`. If `to` ends with `/`, already exists as a directory, or one rule matches multiple assets, the runtime appends the source basename, so `select: docs` to `.../sys1/` materializes `.../sys1/docs`.
+- For `copy` and `hardlink` rules that manage directory trees on real hosts, recommend explicit `ignore` globs when the destination environment generates metadata files. Common examples are `**/.DS_Store`, `**/._*`, `**/Thumbs.db`, and `**/desktop.ini`.
+- Keep that ignore policy explicit on the rule. Do not imply that ssot-manager has built-in runtime defaults for platform junk files.
 - Do not equate assets-first with "one profile per installation surface". That is only one possible authoring pattern.
 - When the same source asset should sync to multiple consumers as one bundle, prefer one rule with multiple `to` destinations inside one profile.
 - The installed binary and CLI help examples use `ssot-manager`. Do not assume an `ssot` binary exists on PATH.

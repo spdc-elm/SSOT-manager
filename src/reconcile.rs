@@ -10,8 +10,9 @@ use crate::paths::{effective_target_path, normalize, path_to_string};
 use crate::prompt::profile_requirements;
 use crate::state::{
     ApplyJournal, JournalEntry, ManagedState, PathState, StateStore, build_record,
-    create_backup_artifact, materialize_target, now_timestamp, remove_existing_path,
-    restore_from_backup, restore_from_source, restore_path, snapshot_path, target_matches_source,
+    create_backup_artifact, materialize_target, now_timestamp, recorded_post_state_matches,
+    remove_existing_path, restore_from_backup, restore_from_source, restore_path, snapshot_path,
+    target_matches_source,
 };
 
 #[derive(Debug, Clone)]
@@ -27,6 +28,7 @@ pub struct PlanItem {
     pub target: PathBuf,
     pub desired_source: Option<PathBuf>,
     pub desired_mode: Option<MaterializationMode>,
+    pub desired_ignore: Option<Vec<String>>,
     pub forceable: bool,
     pub reason: String,
 }
@@ -154,10 +156,21 @@ fn apply_plan_internal(
                 };
 
                 remove_existing_path(&item.target)?;
-                materialize_target(desired_source, &item.target, desired_mode)?;
+                materialize_target(
+                    desired_source,
+                    &item.target,
+                    desired_mode,
+                    item.desired_ignore.as_deref().unwrap_or(&[]),
+                )?;
 
                 let after = snapshot_path(&item.target)?;
-                if !target_matches_source(desired_source, &item.target, &after, desired_mode)? {
+                if !target_matches_source(
+                    desired_source,
+                    &item.target,
+                    &after,
+                    desired_mode,
+                    item.desired_ignore.as_deref().unwrap_or(&[]),
+                )? {
                     bail!(
                         "verification failed for {} after {}",
                         item.target.display(),
@@ -171,6 +184,7 @@ fn apply_plan_internal(
                         source: desired_source.clone(),
                         target: item.target.clone(),
                         mode: desired_mode,
+                        ignore: item.desired_ignore.clone().unwrap_or_default(),
                     },
                     timestamp,
                 ));
@@ -222,10 +236,21 @@ fn apply_plan_internal(
                     create_backup_artifact(store, timestamp, index, &item.target, &before)?;
 
                 remove_existing_path(&item.target)?;
-                materialize_target(desired_source, &item.target, desired_mode)?;
+                materialize_target(
+                    desired_source,
+                    &item.target,
+                    desired_mode,
+                    item.desired_ignore.as_deref().unwrap_or(&[]),
+                )?;
 
                 let after = snapshot_path(&item.target)?;
-                if !target_matches_source(desired_source, &item.target, &after, desired_mode)? {
+                if !target_matches_source(
+                    desired_source,
+                    &item.target,
+                    &after,
+                    desired_mode,
+                    item.desired_ignore.as_deref().unwrap_or(&[]),
+                )? {
                     bail!(
                         "verification failed for {} after {}",
                         item.target.display(),
@@ -239,6 +264,7 @@ fn apply_plan_internal(
                         source: desired_source.clone(),
                         target: item.target.clone(),
                         mode: desired_mode,
+                        ignore: item.desired_ignore.clone().unwrap_or_default(),
                     },
                     timestamp,
                 ));
@@ -320,6 +346,9 @@ fn apply_plan_internal(
                         if let Some(desired_mode) = item.desired_mode {
                             existing.mode = desired_mode;
                         }
+                        if let Some(desired_ignore) = &item.desired_ignore {
+                            existing.ignore = desired_ignore.clone();
+                        }
                     }
                 }
             }
@@ -382,6 +411,7 @@ pub fn doctor_profile(
                     &target,
                     &current,
                     record.mode,
+                    &record.ignore,
                 )? {
                     let message = match record.mode {
                         MaterializationMode::Symlink => {
@@ -426,11 +456,28 @@ pub fn undo_last_apply(store: &StateStore) -> Result<UndoResult> {
     for entry in &journal.entries {
         let target = PathBuf::from(&entry.target);
         let current = snapshot_path(&target)?;
-        if current != entry.after {
-            bail!(
-                "refusing to undo because {} no longer matches the recorded post-apply state",
-                target.display()
-            );
+        match &entry.record_after {
+            Some(record_after) => {
+                if !recorded_post_state_matches(
+                    &entry.after,
+                    &current,
+                    record_after.mode,
+                    &record_after.ignore,
+                )? {
+                    bail!(
+                        "refusing to undo because {} no longer matches the recorded post-apply state",
+                        target.display()
+                    );
+                }
+            }
+            None => {
+                if current != entry.after {
+                    bail!(
+                        "refusing to undo because {} no longer matches the recorded post-apply state",
+                        target.display()
+                    );
+                }
+            }
         }
     }
 
@@ -459,6 +506,7 @@ pub fn undo_last_apply(store: &StateStore) -> Result<UndoResult> {
                         &target,
                         Path::new(&record_before.source),
                         record_before.mode,
+                        &record_before.ignore,
                         source_state,
                     )?;
                 }
@@ -508,6 +556,7 @@ fn blocking_prerequisite_items(config: &Config, profile_name: &str) -> Result<Ve
             target: PathBuf::from(requirement.output),
             desired_source: None,
             desired_mode: None,
+            desired_ignore: None,
             forceable: false,
             reason: format!(
                 "required composition '{}' is {} ({})",
@@ -531,6 +580,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
                 target: intent.target.clone(),
                 desired_source: Some(intent.source.clone()),
                 desired_mode: Some(intent.mode),
+                desired_ignore: Some(intent.ignore.clone()),
                 forceable: false,
                 reason: format!(
                     "target resolves to {} which overlaps managed source {}",
@@ -544,13 +594,20 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
         let current = snapshot_path(&intent.target)?;
         let record = state.records.get(&target_key);
 
-        let item = if target_matches_source(&intent.source, &intent.target, &current, intent.mode)?
+        let item = if target_matches_source(
+            &intent.source,
+            &intent.target,
+            &current,
+            intent.mode,
+            &intent.ignore,
+        )?
         {
             PlanItem {
                 action: Action::Skip,
                 target: intent.target.clone(),
                 desired_source: Some(intent.source.clone()),
                 desired_mode: Some(intent.mode),
+                desired_ignore: Some(intent.ignore.clone()),
                 forceable: false,
                 reason: "target already matches the desired materialization".to_string(),
             }
@@ -561,6 +618,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
                     target: intent.target.clone(),
                     desired_source: Some(intent.source.clone()),
                     desired_mode: Some(intent.mode),
+                    desired_ignore: Some(intent.ignore.clone()),
                     forceable: false,
                     reason: "target does not exist".to_string(),
                 },
@@ -570,6 +628,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
                         target: intent.target.clone(),
                         desired_source: Some(intent.source.clone()),
                         desired_mode: Some(intent.mode),
+                        desired_ignore: Some(intent.ignore.clone()),
                         forceable: false,
                         reason: "managed target no longer matches the desired materialization"
                             .to_string(),
@@ -579,6 +638,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
                         target: intent.target.clone(),
                         desired_source: Some(intent.source.clone()),
                         desired_mode: Some(intent.mode),
+                        desired_ignore: Some(intent.ignore.clone()),
                         forceable: false,
                         reason: "target is managed by another profile".to_string(),
                     },
@@ -587,6 +647,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
                         target: intent.target.clone(),
                         desired_source: Some(intent.source.clone()),
                         desired_mode: Some(intent.mode),
+                        desired_ignore: Some(intent.ignore.clone()),
                         forceable: true,
                         reason: "target is an unmanaged symlink that would be replaced".to_string(),
                     },
@@ -618,6 +679,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
                                 target: intent.target.clone(),
                                 desired_source: Some(intent.source.clone()),
                                 desired_mode: Some(intent.mode),
+                                desired_ignore: Some(intent.ignore.clone()),
                                 forceable: false,
                                 reason: reason.to_string(),
                             }
@@ -627,6 +689,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
                             target: intent.target.clone(),
                             desired_source: Some(intent.source.clone()),
                             desired_mode: Some(intent.mode),
+                            desired_ignore: Some(intent.ignore.clone()),
                             forceable: false,
                             reason: "target is managed by another profile".to_string(),
                         },
@@ -635,6 +698,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
                             target: intent.target.clone(),
                             desired_source: Some(intent.source.clone()),
                             desired_mode: Some(intent.mode),
+                            desired_ignore: Some(intent.ignore.clone()),
                             forceable: !matches!(current, PathState::Other),
                             reason: "target contains unmanaged content".to_string(),
                         },
@@ -685,6 +749,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
             target,
             desired_source: None,
             desired_mode: None,
+            desired_ignore: None,
             forceable: false,
             reason: reason.to_string(),
         });
@@ -712,11 +777,13 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
     left.starts_with(&right) || right.starts_with(&left)
 }
 
-fn desired_target_map(plan: &Plan) -> BTreeMap<String, (PathBuf, MaterializationMode)> {
+fn desired_target_map(plan: &Plan) -> BTreeMap<String, (PathBuf, MaterializationMode, Vec<String>)> {
     let mut desired = BTreeMap::new();
     for item in &plan.items {
-        if let (Some(source), Some(mode)) = (&item.desired_source, item.desired_mode) {
-            desired.insert(path_to_string(&item.target), (source.clone(), mode));
+        if let (Some(source), Some(mode), Some(ignore)) =
+            (&item.desired_source, item.desired_mode, &item.desired_ignore)
+        {
+            desired.insert(path_to_string(&item.target), (source.clone(), mode, ignore.clone()));
         }
     }
     desired
@@ -724,13 +791,13 @@ fn desired_target_map(plan: &Plan) -> BTreeMap<String, (PathBuf, Materialization
 
 fn verify_plan_state(
     plan: &Plan,
-    desired_targets: &BTreeMap<String, (PathBuf, MaterializationMode)>,
+    desired_targets: &BTreeMap<String, (PathBuf, MaterializationMode, Vec<String>)>,
     force_with_backup: bool,
 ) -> Result<()> {
     for item in &plan.items {
         match item.action {
             Action::Create | Action::Update | Action::Skip => {
-                if let Some((expected_source, expected_mode)) =
+                if let Some((expected_source, expected_mode, expected_ignore)) =
                     desired_targets.get(&path_to_string(&item.target))
                 {
                     let current = snapshot_path(&item.target)?;
@@ -739,6 +806,7 @@ fn verify_plan_state(
                         &item.target,
                         &current,
                         *expected_mode,
+                        expected_ignore,
                     )? {
                         bail!(
                             "verification failed for {} after {}",
@@ -749,7 +817,7 @@ fn verify_plan_state(
                 }
             }
             Action::Danger if force_with_backup && item.forceable => {
-                if let Some((expected_source, expected_mode)) =
+                if let Some((expected_source, expected_mode, expected_ignore)) =
                     desired_targets.get(&path_to_string(&item.target))
                 {
                     let current = snapshot_path(&item.target)?;
@@ -758,6 +826,7 @@ fn verify_plan_state(
                         &item.target,
                         &current,
                         *expected_mode,
+                        expected_ignore,
                     )? {
                         bail!(
                             "verification failed for {} after force_overwrite",

@@ -75,6 +75,9 @@ That fetches the latest GitHub Release and replaces the existing binary in place
 ## Safety Model
 
 - Supported materialization modes are `symlink`, `copy`, and `hardlink`.
+- Rules may declare `ignore` as an ordered list of glob patterns relative to the matched asset root.
+- `ignore` is most useful for `copy` and `hardlink` directory rules on hosts that generate metadata such as `.DS_Store`, `._*`, `Thumbs.db`, or `desktop.ini`.
+- There are no built-in platform ignore defaults. Strict mirroring remains the default unless the rule declares its own ignore policy.
 - Supported prompt rendering is intentionally narrow: built-in `concat` with optional per-input and outer wrappers plus declared variable interpolation.
 - `profile apply` refuses any plan that contains `danger` actions.
 - `profile apply --force-with-backup` may replace unmanaged file, directory, or symlink collisions only when every danger in the plan is forceable.
@@ -105,6 +108,22 @@ When authoring real configs, prefer explicit flat YAML over wildcard-heavy bundl
 
 If you compile generated assets into your repo, keep the generated path gitignored. The example uses `build/prompts/` for that reason.
 
+For directory sync in `copy` or `hardlink` mode, add `ignore` only when you explicitly want to tolerate host-generated metadata inside the managed tree:
+
+```yaml
+- select: Skills/alpha
+  to:
+    - ~/.codex/skills/
+  mode: copy
+  ignore:
+    - "**/.DS_Store"
+    - "**/._*"
+    - "**/Thumbs.db"
+    - "**/desktop.ini"
+```
+
+Those globs are matched against descendant paths under the selected asset root, not against absolute filesystem paths and not relative to the config file.
+
 ## Inspection Workflow
 
 - `prompt list` shows configured prompt compositions and their output paths.
@@ -112,8 +131,8 @@ If you compile generated assets into your repo, keep the generated path gitignor
 - `prompt preview <name>` renders compiled prompt text without writing the generated file.
 - `prompt build <name>` materializes the generated prompt file under `source_root`.
 - `profile list` shows the configured profiles and their effective source roots.
-- `profile show <name>` shows a profile's declared rules together with its required prompt compositions and their readiness.
-- `profile explain <name>` combines prerequisite status, profile resolution diagnostics, and the current reconcile plan so later UI layers can consume the same explanation model.
+- `profile show <name>` shows a profile's declared rules, including any rule-level `ignore` policy, together with its required prompt compositions and their readiness.
+- `profile explain <name>` combines prerequisite status, profile resolution diagnostics, resolved intents, and the current reconcile plan so later UI layers can consume the same explanation model.
 - Forceable dangers are shown as `danger*` in CLI plan output so they remain dangerous by default but are distinguishable from non-forceable blockers.
 
 ## Thin TUI
