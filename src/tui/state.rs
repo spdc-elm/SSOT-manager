@@ -620,23 +620,17 @@ impl TuiApp {
         }
 
         let text = match self.active_view {
-            DetailView::Show => self
-                .show_view()
-                .map(|view| {
-                    view.map(render_show_text)
-                        .unwrap_or_else(|| Text::from("No profile selected"))
-                }),
-            DetailView::Plan => self
-                .plan_view()
-                .map(|view| {
-                    view.map(render_plan_text)
-                        .unwrap_or_else(|| Text::from("No profile selected"))
-                }),
-            DetailView::Doctor => self
-                .doctor_view()
-                .map(|view| {
-                    render_doctor_text(view.unwrap_or_else(|| "No profile selected".to_string()))
-                }),
+            DetailView::Show => self.show_view().map(|view| {
+                view.map(render_show_text)
+                    .unwrap_or_else(|| Text::from("No profile selected"))
+            }),
+            DetailView::Plan => self.plan_view().map(|view| {
+                view.map(render_plan_text)
+                    .unwrap_or_else(|| Text::from("No profile selected"))
+            }),
+            DetailView::Doctor => self.doctor_view().map(|view| {
+                render_doctor_text(view.unwrap_or_else(|| "No profile selected".to_string()))
+            }),
         }?;
         self.detail_cache = Some(DetailCache {
             profile_name,

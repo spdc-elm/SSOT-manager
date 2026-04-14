@@ -9,11 +9,10 @@ use crate::config::{
 use crate::paths::{effective_target_path, normalize, path_to_string};
 use crate::prompt::profile_requirements;
 use crate::state::{
-    ApplyJournal, JournalEntry, ManagedState, PathState, StateStore, build_record,
+    ApplyJournal, JournalEntry, ManagedState, PathState, SnapshotCache, StateStore, build_record,
     create_backup_artifact, materialize_target, now_timestamp, recorded_post_state_matches,
     remove_existing_path, restore_from_backup, restore_from_source, restore_path, snapshot_path,
     snapshot_path_with_cache, target_matches_source, target_matches_source_with_cache,
-    SnapshotCache,
 };
 
 #[derive(Debug, Clone)]
@@ -578,7 +577,8 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
         let target_key = path_to_string(&intent.target);
         desired_targets.insert(target_key.clone());
         let effective_target = effective_target_path(&intent.target)?;
-        if paths_overlap(&effective_target, &intent.source) {
+        let effective_source = effective_target_path(&intent.source)?;
+        if paths_overlap(&effective_target, &effective_source) {
             items.push(PlanItem {
                 action: Action::Danger,
                 target: intent.target.clone(),
@@ -589,7 +589,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
                 reason: format!(
                     "target resolves to {} which overlaps managed source {}",
                     effective_target.display(),
-                    intent.source.display()
+                    effective_source.display()
                 ),
             });
             continue;
@@ -605,8 +605,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
             intent.mode,
             &intent.ignore,
             &mut snapshot_cache,
-        )?
-        {
+        )? {
             PlanItem {
                 action: Action::Skip,
                 target: intent.target.clone(),
@@ -782,13 +781,20 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
     left.starts_with(&right) || right.starts_with(&left)
 }
 
-fn desired_target_map(plan: &Plan) -> BTreeMap<String, (PathBuf, MaterializationMode, Vec<String>)> {
+fn desired_target_map(
+    plan: &Plan,
+) -> BTreeMap<String, (PathBuf, MaterializationMode, Vec<String>)> {
     let mut desired = BTreeMap::new();
     for item in &plan.items {
-        if let (Some(source), Some(mode), Some(ignore)) =
-            (&item.desired_source, item.desired_mode, &item.desired_ignore)
-        {
-            desired.insert(path_to_string(&item.target), (source.clone(), mode, ignore.clone()));
+        if let (Some(source), Some(mode), Some(ignore)) = (
+            &item.desired_source,
+            item.desired_mode,
+            &item.desired_ignore,
+        ) {
+            desired.insert(
+                path_to_string(&item.target),
+                (source.clone(), mode, ignore.clone()),
+            );
         }
     }
     desired

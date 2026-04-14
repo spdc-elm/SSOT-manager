@@ -486,10 +486,17 @@ pub fn target_matches_source_with_cache(
     cache: &mut SnapshotCache,
 ) -> Result<bool> {
     match mode {
-        MaterializationMode::Symlink => Ok(symlink_matches_expected(target, current_target, source)),
+        MaterializationMode::Symlink => {
+            Ok(symlink_matches_expected(target, current_target, source))
+        }
         MaterializationMode::Copy => {
             let source_state = snapshot_path_with_cache(source, cache)?;
-            path_states_match(&source_state, current_target, MaterializationMode::Copy, ignore)
+            path_states_match(
+                &source_state,
+                current_target,
+                MaterializationMode::Copy,
+                ignore,
+            )
         }
         MaterializationMode::Hardlink => {
             let source_state = snapshot_path_with_cache(source, cache)?;
@@ -679,7 +686,11 @@ fn materialize_tree(
     bail!("unsupported source type at {}", source.display())
 }
 
-fn snapshot_file(path: &Path, metadata: &fs::Metadata, cache: &mut SnapshotCache) -> Result<PathState> {
+fn snapshot_file(
+    path: &Path,
+    metadata: &fs::Metadata,
+    cache: &mut SnapshotCache,
+) -> Result<PathState> {
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
 
@@ -697,7 +708,11 @@ fn snapshot_file(path: &Path, metadata: &fs::Metadata, cache: &mut SnapshotCache
     })
 }
 
-fn sha256_file_cached(path: &Path, metadata: &fs::Metadata, cache: &mut SnapshotCache) -> Result<String> {
+fn sha256_file_cached(
+    path: &Path,
+    metadata: &fs::Metadata,
+    cache: &mut SnapshotCache,
+) -> Result<String> {
     if let Some(key) = file_hash_cache_key(metadata) {
         if let Some(sha256) = cache.file_hashes.get(&key) {
             return Ok(sha256.clone());

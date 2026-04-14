@@ -359,7 +359,10 @@ fn validate_editable_config_model(
             })?;
             for pattern in &rule.ignore {
                 validate_glob_pattern(pattern).with_context(|| {
-                    format!("profile '{name}' rule {} has invalid ignore glob", index + 1)
+                    format!(
+                        "profile '{name}' rule {} has invalid ignore glob",
+                        index + 1
+                    )
                 })?;
             }
 

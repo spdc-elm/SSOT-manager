@@ -319,8 +319,14 @@ fn copy_mode_ignore_globs_skip_metadata_and_allow_undo() {
     let journal: Value =
         serde_json::from_str(&fs::read_to_string(state_dir.join("last-apply.json")).unwrap())
             .unwrap();
-    assert_eq!(journal["entries"][0]["record_after"]["ignore"][0], "**/.DS_Store");
-    assert_eq!(journal["entries"][0]["record_after"]["ignore"][1], "**/Thumbs.db");
+    assert_eq!(
+        journal["entries"][0]["record_after"]["ignore"][0],
+        "**/.DS_Store"
+    );
+    assert_eq!(
+        journal["entries"][0]["record_after"]["ignore"][1],
+        "**/Thumbs.db"
+    );
 
     fs::write(target_root.join(".DS_Store"), "target-metadata").unwrap();
 
@@ -335,7 +341,9 @@ fn copy_mode_ignore_globs_skip_metadata_and_allow_undo() {
         .assert()
         .success()
         .stdout(predicates::str::contains("skip"))
-        .stdout(predicates::str::contains("Summary: create=0 update=0 remove=0 skip=1"))
+        .stdout(predicates::str::contains(
+            "Summary: create=0 update=0 remove=0 skip=1",
+        ))
         .stdout(predicates::str::contains(
             "target already matches the desired materialization",
         ));
@@ -453,7 +461,9 @@ fn hardlink_mode_ignore_globs_skip_metadata_in_plan_and_doctor() {
         .assert()
         .success()
         .stdout(predicates::str::contains("skip"))
-        .stdout(predicates::str::contains("Summary: create=0 update=0 remove=0 skip=1"))
+        .stdout(predicates::str::contains(
+            "Summary: create=0 update=0 remove=0 skip=1",
+        ))
         .stdout(predicates::str::contains(
             "target already matches the desired materialization",
         ));

@@ -36,10 +36,12 @@ fn run_event_loop(terminal: &mut AppTerminal, app: &mut state::TuiApp) -> Result
                 if app.handle_key(key.code)? {
                     break;
                 }
-                terminal.draw(|frame| state::render::draw_ui(frame.area(), frame.buffer_mut(), app))?;
+                terminal
+                    .draw(|frame| state::render::draw_ui(frame.area(), frame.buffer_mut(), app))?;
             }
             Event::Resize(_, _) => {
-                terminal.draw(|frame| state::render::draw_ui(frame.area(), frame.buffer_mut(), app))?;
+                terminal
+                    .draw(|frame| state::render::draw_ui(frame.area(), frame.buffer_mut(), app))?;
             }
             _ => {}
         }
