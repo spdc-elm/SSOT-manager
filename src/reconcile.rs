@@ -12,7 +12,8 @@ use crate::state::{
     ApplyJournal, JournalEntry, ManagedState, PathState, StateStore, build_record,
     create_backup_artifact, materialize_target, now_timestamp, recorded_post_state_matches,
     remove_existing_path, restore_from_backup, restore_from_source, restore_path, snapshot_path,
-    target_matches_source,
+    snapshot_path_with_cache, target_matches_source, target_matches_source_with_cache,
+    SnapshotCache,
 };
 
 #[derive(Debug, Clone)]
@@ -382,13 +383,14 @@ pub fn doctor_profile(
         .ok_or_else(|| anyhow::anyhow!("unknown profile '{profile_name}'"))?;
 
     let mut issues = Vec::new();
+    let mut snapshot_cache = SnapshotCache::default();
     for record in state
         .records
         .values()
         .filter(|record| record.profile == profile_name)
     {
         let target = PathBuf::from(&record.target);
-        let current = snapshot_path(&target)?;
+        let current = snapshot_path_with_cache(&target, &mut snapshot_cache)?;
         match current {
             PathState::Missing => issues.push(DoctorIssue {
                 kind: DoctorIssueKind::MissingManagedTarget,
@@ -406,12 +408,13 @@ pub fn doctor_profile(
                             source.display()
                         ),
                     });
-                } else if !target_matches_source(
+                } else if !target_matches_source_with_cache(
                     Path::new(&record.source),
                     &target,
                     &current,
                     record.mode,
                     &record.ignore,
+                    &mut snapshot_cache,
                 )? {
                     let message = match record.mode {
                         MaterializationMode::Symlink => {
@@ -569,6 +572,7 @@ fn blocking_prerequisite_items(config: &Config, profile_name: &str) -> Result<Ve
 fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result<Plan> {
     let mut items = Vec::new();
     let mut desired_targets = BTreeSet::new();
+    let mut snapshot_cache = SnapshotCache::default();
 
     for intent in &resolved.intents {
         let target_key = path_to_string(&intent.target);
@@ -591,15 +595,16 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
             continue;
         }
 
-        let current = snapshot_path(&intent.target)?;
+        let current = snapshot_path_with_cache(&intent.target, &mut snapshot_cache)?;
         let record = state.records.get(&target_key);
 
-        let item = if target_matches_source(
+        let item = if target_matches_source_with_cache(
             &intent.source,
             &intent.target,
             &current,
             intent.mode,
             &intent.ignore,
+            &mut snapshot_cache,
         )?
         {
             PlanItem {
@@ -720,7 +725,7 @@ fn plan_from_resolved(resolved: ResolvedProfile, state: &ManagedState) -> Result
         }
 
         let target = PathBuf::from(&record.target);
-        let current = snapshot_path(&target)?;
+        let current = snapshot_path_with_cache(&target, &mut snapshot_cache)?;
         let action = match (&record.mode, current) {
             (_, PathState::Missing) => Action::Remove,
             (MaterializationMode::Symlink, PathState::Symlink { .. }) => Action::Remove,

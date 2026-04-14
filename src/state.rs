@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -81,6 +81,25 @@ pub enum PathState {
 #[derive(Debug, Clone)]
 pub struct StateStore {
     root: PathBuf,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SnapshotCache {
+    path_states: HashMap<PathBuf, PathState>,
+    file_hashes: HashMap<FileHashCacheKey, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FileHashCacheKey {
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    size: u64,
+    #[cfg(unix)]
+    modified_secs: i64,
+    #[cfg(unix)]
+    modified_nanos: i64,
 }
 
 impl StateStore {
@@ -210,6 +229,22 @@ impl StateStore {
 }
 
 pub fn snapshot_path(path: &Path) -> Result<PathState> {
+    let mut cache = SnapshotCache::default();
+    snapshot_path_with_cache(path, &mut cache)
+}
+
+pub fn snapshot_path_with_cache(path: &Path, cache: &mut SnapshotCache) -> Result<PathState> {
+    let path = normalize(path);
+    if let Some(state) = cache.path_states.get(&path) {
+        return Ok(state.clone());
+    }
+
+    let state = snapshot_path_uncached(&path, cache)?;
+    cache.path_states.insert(path, state.clone());
+    Ok(state)
+}
+
+fn snapshot_path_uncached(path: &Path, cache: &mut SnapshotCache) -> Result<PathState> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
             let file_type = metadata.file_type();
@@ -228,12 +263,12 @@ pub fn snapshot_path(path: &Path) -> Result<PathState> {
                 {
                     let entry = entry?;
                     let name = entry.file_name().to_string_lossy().into_owned();
-                    entries.insert(name, snapshot_path(&entry.path())?);
+                    entries.insert(name, snapshot_path_with_cache(&entry.path(), cache)?);
                 }
                 return Ok(PathState::Directory { entries });
             }
             if file_type.is_file() {
-                return snapshot_file(path, &metadata);
+                return snapshot_file(path, &metadata, cache);
             }
             Ok(PathState::Other)
         }
@@ -438,14 +473,26 @@ pub fn target_matches_source(
     mode: MaterializationMode,
     ignore: &[String],
 ) -> Result<bool> {
+    let mut cache = SnapshotCache::default();
+    target_matches_source_with_cache(source, target, current_target, mode, ignore, &mut cache)
+}
+
+pub fn target_matches_source_with_cache(
+    source: &Path,
+    target: &Path,
+    current_target: &PathState,
+    mode: MaterializationMode,
+    ignore: &[String],
+    cache: &mut SnapshotCache,
+) -> Result<bool> {
     match mode {
         MaterializationMode::Symlink => Ok(symlink_matches_expected(target, current_target, source)),
         MaterializationMode::Copy => {
-            let source_state = snapshot_path(source)?;
+            let source_state = snapshot_path_with_cache(source, cache)?;
             path_states_match(&source_state, current_target, MaterializationMode::Copy, ignore)
         }
         MaterializationMode::Hardlink => {
-            let source_state = snapshot_path(source)?;
+            let source_state = snapshot_path_with_cache(source, cache)?;
             path_states_match(
                 &source_state,
                 current_target,
@@ -632,11 +679,11 @@ fn materialize_tree(
     bail!("unsupported source type at {}", source.display())
 }
 
-fn snapshot_file(path: &Path, metadata: &fs::Metadata) -> Result<PathState> {
+fn snapshot_file(path: &Path, metadata: &fs::Metadata, cache: &mut SnapshotCache) -> Result<PathState> {
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
 
-    let sha256 = sha256_file(path)?;
+    let sha256 = sha256_file_cached(path, metadata, cache)?;
     #[cfg(unix)]
     let (device, inode) = (Some(metadata.dev()), Some(metadata.ino()));
     #[cfg(not(unix))]
@@ -648,6 +695,20 @@ fn snapshot_file(path: &Path, metadata: &fs::Metadata) -> Result<PathState> {
         device,
         inode,
     })
+}
+
+fn sha256_file_cached(path: &Path, metadata: &fs::Metadata, cache: &mut SnapshotCache) -> Result<String> {
+    if let Some(key) = file_hash_cache_key(metadata) {
+        if let Some(sha256) = cache.file_hashes.get(&key) {
+            return Ok(sha256.clone());
+        }
+
+        let sha256 = sha256_file(path)?;
+        cache.file_hashes.insert(key, sha256.clone());
+        return Ok(sha256);
+    }
+
+    sha256_file(path)
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
@@ -667,6 +728,27 @@ fn sha256_file(path: &Path) -> Result<String> {
     }
 
     Ok(bytes_to_hex(&hasher.finalize()))
+}
+
+fn file_hash_cache_key(metadata: &fs::Metadata) -> Option<FileHashCacheKey> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        return Some(FileHashCacheKey {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            size: metadata.len(),
+            modified_secs: metadata.mtime(),
+            modified_nanos: metadata.mtime_nsec(),
+        });
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
 }
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -772,4 +854,66 @@ fn apply_permissions(target: &Path, metadata: &fs::Metadata) -> Result<()> {
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let payload = serde_json::to_string_pretty(value)?;
     fs::write(path, payload).with_context(|| format!("failed to write {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn snapshot_cache_reuses_file_hash_for_hardlinks() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source.txt");
+        let target = temp.path().join("target.txt");
+        fs::write(&source, "same inode").unwrap();
+        fs::hard_link(&source, &target).unwrap();
+
+        let mut cache = SnapshotCache::default();
+        let source_state = snapshot_path_with_cache(&source, &mut cache).unwrap();
+        let target_state = snapshot_path_with_cache(&target, &mut cache).unwrap();
+
+        assert!(path_state_hardlink_matches(&source_state, &target_state));
+        assert_eq!(cache.file_hashes.len(), 1);
+        assert_eq!(cache.path_states.len(), 2);
+    }
+
+    #[test]
+    fn target_match_cache_reuses_directory_snapshots() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(source.join("a.txt"), "a").unwrap();
+        fs::write(source.join("b.txt"), "b").unwrap();
+        fs::hard_link(source.join("a.txt"), target.join("a.txt")).unwrap();
+        fs::hard_link(source.join("b.txt"), target.join("b.txt")).unwrap();
+
+        let mut cache = SnapshotCache::default();
+        let current_target = snapshot_path_with_cache(&target, &mut cache).unwrap();
+        let first = target_matches_source_with_cache(
+            &source,
+            &target,
+            &current_target,
+            MaterializationMode::Hardlink,
+            &[],
+            &mut cache,
+        )
+        .unwrap();
+        let cached_path_count = cache.path_states.len();
+        let second = target_matches_source_with_cache(
+            &source,
+            &target,
+            &current_target,
+            MaterializationMode::Hardlink,
+            &[],
+            &mut cache,
+        )
+        .unwrap();
+
+        assert!(first);
+        assert!(second);
+        assert_eq!(cache.path_states.len(), cached_path_count);
+    }
 }
