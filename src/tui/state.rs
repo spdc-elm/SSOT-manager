@@ -166,6 +166,12 @@ impl ProfileDraft {
         for rule in &mut draft.rules {
             rule.select = rule.select.trim().to_string();
             rule.mode = rule.mode.trim().to_string();
+            rule.ignore = rule
+                .ignore
+                .iter()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect();
             rule.to = rule
                 .to
                 .iter()
@@ -330,9 +336,19 @@ pub(super) struct TuiApp {
     shell_focus: ShellFocus,
     active_view: DetailView,
     detail_scroll: u16,
+    detail_revision: u64,
+    detail_cache: Option<DetailCache>,
     message: String,
     force_apply_armed_for: Option<String>,
     editor: Option<ProfileEditorState>,
+}
+
+#[derive(Debug, Clone)]
+struct DetailCache {
+    profile_name: Option<String>,
+    view: DetailView,
+    revision: u64,
+    text: Text<'static>,
 }
 
 impl TuiApp {
@@ -355,6 +371,8 @@ impl TuiApp {
             shell_focus: ShellFocus::BrowseProfiles,
             active_view: DetailView::Show,
             detail_scroll: 0,
+            detail_revision: 0,
+            detail_cache: None,
             message: "Ready".to_string(),
             force_apply_armed_for: None,
             editor: None,
@@ -375,6 +393,11 @@ impl TuiApp {
 
     fn reset_detail_scroll(&mut self) {
         self.detail_scroll = 0;
+    }
+
+    fn invalidate_detail_cache(&mut self) {
+        self.detail_revision = self.detail_revision.wrapping_add(1);
+        self.detail_cache = None;
     }
 
     fn clamp_detail_scroll(&mut self) {
@@ -462,6 +485,7 @@ impl TuiApp {
         self.config = validate_editable_config(&self.config_doc)?;
         self.reload_profiles(selected.as_deref());
         self.state = self.store.load()?;
+        self.invalidate_detail_cache();
         self.reset_detail_scroll();
         self.message = "Refreshed state".to_string();
         Ok(())
@@ -495,6 +519,7 @@ impl TuiApp {
             apply_plan(plan, &self.state, &self.store)?
         };
         self.state = self.store.load()?;
+        self.invalidate_detail_cache();
         self.message = format!(
             "Applied '{}' with {} journal entries",
             profile_name,
@@ -511,6 +536,7 @@ impl TuiApp {
         self.force_apply_armed_for = None;
         let result = undo_last_apply(&self.store)?;
         self.state = self.store.load()?;
+        self.invalidate_detail_cache();
         self.message = format!(
             "Undid '{}' with {} reverted targets",
             result.profile_name,
@@ -540,6 +566,7 @@ impl TuiApp {
                 profile_name
             );
         }
+        self.invalidate_detail_cache();
 
         Ok(())
     }
@@ -581,32 +608,46 @@ impl TuiApp {
             })
     }
 
-    fn detail_text(&self) -> Result<Text<'static>> {
-        match self.active_view {
+    fn detail_text(&mut self) -> Result<Text<'static>> {
+        let profile_name = self.selected_profile_name().map(str::to_string);
+        if let Some(cache) = &self.detail_cache {
+            if cache.profile_name == profile_name
+                && cache.view == self.active_view
+                && cache.revision == self.detail_revision
+            {
+                return Ok(cache.text.clone());
+            }
+        }
+
+        let text = match self.active_view {
             DetailView::Show => self
                 .show_view()
                 .map(|view| {
                     view.map(render_show_text)
                         .unwrap_or_else(|| Text::from("No profile selected"))
-                })
-                .map_err(Into::into),
+                }),
             DetailView::Plan => self
                 .plan_view()
                 .map(|view| {
                     view.map(render_plan_text)
                         .unwrap_or_else(|| Text::from("No profile selected"))
-                })
-                .map_err(Into::into),
+                }),
             DetailView::Doctor => self
                 .doctor_view()
                 .map(|view| {
                     render_doctor_text(view.unwrap_or_else(|| "No profile selected".to_string()))
-                })
-                .map_err(Into::into),
-        }
+                }),
+        }?;
+        self.detail_cache = Some(DetailCache {
+            profile_name,
+            view: self.active_view,
+            revision: self.detail_revision,
+            text: text.clone(),
+        });
+        Ok(text)
     }
 
-    fn detail_line_count(&self) -> usize {
+    fn detail_line_count(&mut self) -> usize {
         self.detail_text().map(|text| text.lines.len()).unwrap_or(1)
     }
 
@@ -713,6 +754,7 @@ impl TuiApp {
         self.config_doc = load_editable_config(&document.path)?;
         self.config = validate_editable_config(&self.config_doc)?;
         self.reload_profiles(Some(draft.name.as_str()));
+        self.invalidate_detail_cache();
         self.editor = None;
         self.force_apply_armed_for = None;
         self.message = format!("Saved profile '{}'", draft.name);
@@ -769,6 +811,7 @@ impl TuiApp {
         self.editor = None;
         self.force_apply_armed_for = None;
         self.reload_profiles(None);
+        self.invalidate_detail_cache();
         self.message = format!("Deleted profile '{}'", profile_name);
         Ok(())
     }
@@ -957,6 +1000,7 @@ fn default_editable_rule() -> EditableRule {
         select: String::new(),
         to: Vec::new(),
         mode: MaterializationMode::Symlink.as_str().to_string(),
+        ignore: Vec::new(),
         enabled: true,
         tags: Vec::new(),
         note: None,

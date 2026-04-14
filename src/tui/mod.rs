@@ -25,21 +25,23 @@ pub fn run_tui(config_doc: EditableConfigDocument, store: StateStore) -> Result<
 }
 
 fn run_event_loop(terminal: &mut AppTerminal, app: &mut state::TuiApp) -> Result<()> {
+    terminal.draw(|frame| state::render::draw_ui(frame.area(), frame.buffer_mut(), app))?;
+
     loop {
-        terminal.draw(|frame| state::render::draw_ui(frame.area(), frame.buffer_mut(), app))?;
-
-        if !event::poll(std::time::Duration::from_millis(200))? {
-            continue;
-        }
-
-        if let Event::Key(key) = event::read()? {
-            if key.kind != KeyEventKind::Press {
-                continue;
+        match event::read()? {
+            Event::Key(key) => {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                if app.handle_key(key.code)? {
+                    break;
+                }
+                terminal.draw(|frame| state::render::draw_ui(frame.area(), frame.buffer_mut(), app))?;
             }
-
-            if app.handle_key(key.code)? {
-                break;
+            Event::Resize(_, _) => {
+                terminal.draw(|frame| state::render::draw_ui(frame.area(), frame.buffer_mut(), app))?;
             }
+            _ => {}
         }
     }
 

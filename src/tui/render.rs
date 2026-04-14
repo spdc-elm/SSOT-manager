@@ -11,7 +11,7 @@ use ratatui::{
 
 use super::*;
 
-pub(crate) fn draw_ui(area: Rect, buf: &mut ratatui::buffer::Buffer, app: &TuiApp) {
+pub(crate) fn draw_ui(area: Rect, buf: &mut ratatui::buffer::Buffer, app: &mut TuiApp) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -98,7 +98,7 @@ pub(super) fn render_profile_list(area: Rect, buf: &mut ratatui::buffer::Buffer,
     list.render(area, buf);
 }
 
-pub(super) fn render_detail(area: Rect, buf: &mut ratatui::buffer::Buffer, app: &TuiApp) {
+pub(super) fn render_detail(area: Rect, buf: &mut ratatui::buffer::Buffer, app: &mut TuiApp) {
     if let Some(editor) = &app.editor {
         render_editor_detail(area, buf, editor);
         return;
@@ -627,6 +627,9 @@ pub(super) fn render_show_text(view: ProfileShowView) -> Text<'static> {
         lines.push(Line::from(format!("  select {}", rule.select)));
         for destination in rule.destinations {
             lines.push(Line::from(format!("  to {destination}")));
+        }
+        if !rule.ignore.is_empty() {
+            lines.push(Line::from(format!("  ignore {}", rule.ignore.join(","))));
         }
         if !rule.tags.is_empty() {
             lines.push(Line::from(format!("  tags {}", rule.tags.join(","))));

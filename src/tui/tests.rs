@@ -17,10 +17,10 @@ use crate::state::StateStore;
 #[test]
 fn render_shows_profiles_and_detail_content() {
     let harness = Harness::new();
-    let app = TuiApp::new(harness.config_doc(), harness.store()).unwrap();
+    let mut app = TuiApp::new(harness.config_doc(), harness.store()).unwrap();
     let mut buffer = Buffer::empty(Rect::new(0, 0, 120, 40));
 
-    draw_ui(Rect::new(0, 0, 120, 40), &mut buffer, &app);
+    draw_ui(Rect::new(0, 0, 120, 40), &mut buffer, &mut app);
 
     let rendered = buffer_to_string(&buffer);
     assert!(rendered.contains("Profiles"));
@@ -59,6 +59,7 @@ fn render_detail_scrolls_to_later_rules() {
                 harness.dest_root().display()
             )],
             mode: MaterializationMode::Symlink,
+            ignore: Vec::new(),
             enabled: true,
             tags: Vec::new(),
             note: None,
@@ -67,11 +68,11 @@ fn render_detail_scrolls_to_later_rules() {
     app.scroll_detail_to_end();
     let mut buffer = Buffer::empty(Rect::new(0, 0, 80, 18));
 
-    render_detail(Rect::new(0, 0, 80, 18), &mut buffer, &app);
+    render_detail(Rect::new(0, 0, 80, 18), &mut buffer, &mut app);
 
     let rendered = buffer_to_string(&buffer);
-    assert!(rendered.contains("Extra/11.md"));
-    assert!(!rendered.contains("Skills/*"));
+    assert!(rendered.contains("rule 11 [symlink] enabled"), "{rendered}");
+    assert!(!rendered.contains("Skills/*"), "{rendered}");
 }
 
 #[test]
@@ -138,6 +139,7 @@ fn vertical_navigation_keys_switch_between_profile_movement_and_detail_scrolling
                 harness.dest_root().display()
             )],
             mode: MaterializationMode::Symlink,
+            ignore: Vec::new(),
             enabled: true,
             tags: Vec::new(),
             note: None,
@@ -168,6 +170,7 @@ fn page_navigation_keys_still_scroll_detail_in_browse_mode() {
                 harness.dest_root().display()
             )],
             mode: MaterializationMode::Symlink,
+            ignore: Vec::new(),
             enabled: true,
             tags: Vec::new(),
             note: None,
@@ -193,6 +196,7 @@ fn view_switch_resets_detail_scroll_but_keeps_detail_focus() {
                 harness.dest_root().display()
             )],
             mode: MaterializationMode::Symlink,
+            ignore: Vec::new(),
             enabled: true,
             tags: Vec::new(),
             note: None,
@@ -222,6 +226,7 @@ fn render_detail_shows_overflow_indicator_only_when_needed() {
                 harness.dest_root().display()
             )],
             mode: MaterializationMode::Symlink,
+            ignore: Vec::new(),
             enabled: true,
             tags: Vec::new(),
             note: None,
@@ -230,22 +235,40 @@ fn render_detail_shows_overflow_indicator_only_when_needed() {
     long_app.handle_key(KeyCode::Enter).unwrap();
     let mut long_buffer = Buffer::empty(Rect::new(0, 0, 80, 18));
 
-    render_detail(Rect::new(0, 0, 80, 18), &mut long_buffer, &long_app);
+    render_detail(Rect::new(0, 0, 80, 18), &mut long_buffer, &mut long_app);
 
     let long_rendered = buffer_to_string(&long_buffer);
     assert!(long_rendered.contains("Detail [Inspect] 1-13/"));
     assert!(long_rendered.contains("#"));
     assert!(long_rendered.contains(":"));
 
-    let short_app = TuiApp::new(harness.config_doc(), harness.store()).unwrap();
+    let mut short_app = TuiApp::new(harness.config_doc(), harness.store()).unwrap();
     let mut short_buffer = Buffer::empty(Rect::new(0, 0, 80, 18));
 
-    render_detail(Rect::new(0, 0, 80, 18), &mut short_buffer, &short_app);
+    render_detail(Rect::new(0, 0, 80, 18), &mut short_buffer, &mut short_app);
 
     let short_rendered = buffer_to_string(&short_buffer);
     assert!(short_rendered.contains("Detail [Preview]"));
     assert!(!short_rendered.contains("Detail [Preview] 1-"));
     assert!(!short_rendered.contains("#"));
+}
+
+#[test]
+fn detail_cache_is_reused_until_state_changes() {
+    let harness = Harness::new();
+    let mut app = TuiApp::new(harness.config_doc(), harness.store()).unwrap();
+
+    let first = text_to_plain_string(&app.detail_text().unwrap());
+    assert!(app.detail_cache.is_some());
+    let cached_revision = app.detail_revision;
+
+    let second = text_to_plain_string(&app.detail_text().unwrap());
+    assert_eq!(first, second);
+    assert_eq!(app.detail_revision, cached_revision);
+
+    app.apply_selected().unwrap();
+    assert!(app.detail_cache.is_none());
+    assert!(app.detail_revision > cached_revision);
 }
 
 #[test]
@@ -327,7 +350,7 @@ fn render_surfaces_latest_status_message() {
     app.apply_selected().unwrap();
     let mut buffer = Buffer::empty(Rect::new(0, 0, 120, 40));
 
-    draw_ui(Rect::new(0, 0, 120, 40), &mut buffer, &app);
+    draw_ui(Rect::new(0, 0, 120, 40), &mut buffer, &mut app);
 
     let rendered = buffer_to_string(&buffer);
     assert!(rendered.contains("Status: Applied 'primary'"));
@@ -613,6 +636,7 @@ fn render_rule_list_keeps_selected_rule_visible_in_small_viewport() {
                 select: format!("rule-{index}"),
                 to: vec![format!("/tmp/rule-{index}")],
                 mode: MaterializationMode::Symlink.as_str().to_string(),
+                ignore: Vec::new(),
                 enabled: true,
                 tags: Vec::new(),
                 note: None,
