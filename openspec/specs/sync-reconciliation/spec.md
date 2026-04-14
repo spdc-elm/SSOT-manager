@@ -4,7 +4,7 @@
 Define how the SSOT manager compares desired sync state to the live filesystem and applies safe, verified changes.
 ## Requirements
 ### Requirement: The planner classifies target changes explicitly
-The system SHALL compare the desired sync intents for a profile against the current filesystem and classify each target as `create`, `update`, `remove`, `skip`, `warning`, or `danger`. The comparison MUST evaluate whether the current target already matches the desired source asset under the intent's declared materialization mode.
+The system SHALL compare the desired sync intents for a profile against the current filesystem and classify each target as `create`, `update`, `remove`, `skip`, `warning`, or `danger`. The comparison MUST evaluate whether the current target already matches the desired source asset under the intent's declared materialization mode. When a directory asset is evaluated under a rule with `ignore` globs, the comparison MUST exclude descendants whose relative paths match those globs from both the desired source tree and the current target tree before deciding whether the target already matches.
 
 #### Scenario: Missing target becomes create
 - **WHEN** a desired managed target path does not exist in the filesystem
@@ -12,6 +12,10 @@ The system SHALL compare the desired sync intents for a profile against the curr
 
 #### Scenario: Matching materialized target becomes skip
 - **WHEN** a target already exists and matches the desired source asset under its declared materialization mode
+- **THEN** the generated plan marks that target as `skip`
+
+#### Scenario: Ignored target-only metadata does not force an update
+- **WHEN** a directory target differs from the desired source tree only by descendants whose relative paths match the rule's `ignore` globs
 - **THEN** the generated plan marks that target as `skip`
 
 ### Requirement: Unmanaged collisions are surfaced as danger by default
@@ -39,7 +43,7 @@ The system SHALL detect when a target's effective materialization path overlaps 
 - **AND** the reported reason identifies the source/target overlap rather than a generic unmanaged collision
 
 ### Requirement: Apply executes only safe planned actions and verifies results
-The system SHALL execute filesystem mutations only from the computed plan, refuse to apply `danger` actions by default, and verify after mutation that each changed target matches the expected managed source asset under the declared materialization mode. For directory assets, `copy` MUST create an equivalent directory tree with copied file contents, and `hardlink` MUST create an equivalent directory tree whose leaf files are hardlinked to the corresponding source files. The system SHALL support an explicit force-with-backup apply path that may replace forceable `danger` targets only after recording a restorable backup of the unmanaged content.
+The system SHALL execute filesystem mutations only from the computed plan, refuse to apply `danger` actions by default, and verify after mutation that each changed target matches the expected managed source asset under the declared materialization mode. For directory assets, `copy` MUST create an equivalent directory tree with copied file contents, and `hardlink` MUST create an equivalent directory tree whose leaf files are hardlinked to the corresponding source files. When a rule declares `ignore` globs for a directory asset, the runtime MUST exclude ignore-matched descendants from the desired materialized tree and from post-apply verification. The system SHALL support an explicit force-with-backup apply path that may replace forceable `danger` targets only after recording a restorable backup of the unmanaged content.
 
 #### Scenario: Safe plan is applied and verified
 - **WHEN** a profile plan contains only `create`, `update`, `remove`, `skip`, or `warning` actions
@@ -48,6 +52,10 @@ The system SHALL execute filesystem mutations only from the computed plan, refus
 #### Scenario: Hardlink mode materializes a directory tree
 - **WHEN** a rule with `mode: hardlink` matches a source directory
 - **THEN** the applied target becomes a directory tree with the same relative entries and hardlinked leaf files
+
+#### Scenario: Ignored source descendants are not materialized
+- **WHEN** a directory rule declares `ignore` globs and a source descendant's relative path matches one of them
+- **THEN** `copy` and `hardlink` materialization omit that descendant from the resulting managed target tree
 
 #### Scenario: Dangerous plan is refused by ordinary apply
 - **WHEN** a profile plan contains one or more `danger` actions
